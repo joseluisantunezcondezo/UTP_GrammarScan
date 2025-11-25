@@ -459,10 +459,13 @@ def page_for_offset(bounds: List[Tuple[int, int, int]], offset: int) -> int:
 
 @st.cache_resource(show_spinner=False)
 def get_language_tool(lang_code: str):
-    if not find_java():
-        raise RuntimeError("Java no detectado. Activa tu JRE/JDK para usar LanguageTool local.")
     import language_tool_python as lt
-    return lt.LanguageTool(lang_code)
+    try:
+        # Usa la API pública de LanguageTool (no requiere Java ni servidor local)
+        return lt.LanguageToolPublicAPI(lang_code)
+    except Exception as e:
+        raise RuntimeError(f"No se pudo conectar con LanguageTool (API pública): {e}")
+
 
 
 LT_LOCK = threading.Lock()  # serializa check()
@@ -657,11 +660,16 @@ def main():
     with c1:
         lang_code = st.selectbox("Idioma", ["es", "en-US", "pt-BR", "fr", "de"], index=0)
     with c2:
+
         max_chars_call = st.number_input(
-            "Máx. caracteres por llamada (LOCAL)",
-            5000, 80000, 30000,
-            help="Se agrupan páginas/diapos hasta este límite para mantener contexto."
-        )
+            "Máx. caracteres por llamada a LanguageTool",
+            5000, 20000, 15000,
+            help=(
+            "La API pública gratuita permite ~20.000 caracteres por petición. "
+            "Se agrupan páginas/diapos hasta este límite para mantener contexto."
+        ),
+    )
+
     with c3:
         workers = st.slider(
             "Trabajadores (hilos)",
@@ -675,11 +683,13 @@ def main():
     )
 
     with st.expander("Estado del motor"):
-        st.write(f"Java detectado: **{find_java()}**")
-        st.write("Backend LanguageTool: **local** (una sola instancia por sesión).")
-        if not find_java():
-            st.error("No se puede continuar sin Java.")
-            st.stop()
+        st.write("Backend LanguageTool: **API pública remota** (LanguageTool).")
+    st.write(
+        "No se necesita Java local. "
+        "Ten en cuenta que la API gratuita tiene límites aprox. de "
+        "~20 solicitudes/minuto y ~20.000 caracteres por solicitud."
+    )
+
 
     ups = st.file_uploader(
         "Sube uno o varios archivos (.pdf, .docx, .pptx, .txt)",
@@ -803,6 +813,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
