@@ -19,6 +19,7 @@ from docx.oxml.text.paragraph import CT_P
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE  # <<< NUEVO
 from dataclasses import dataclass  # <<< NUEVO
 
 
@@ -51,7 +52,7 @@ def safe_str(x) -> str:
         return ""
 
 
-# --- NUEVO: util para tildes en modismos ---
+# --- util para tildes en modismos ---
 ACCENTED_VOWELS = "áéíóúÁÉÍÓÚ"
 
 
@@ -581,7 +582,62 @@ def _read_pptx_via_zip(bio: BytesIO) -> List[Tuple[int, str]]:
     return slides
 
 
+# ========= lector recursivo de shapes PPTX ========= #
+
+def _iter_shape_texts(shape) -> List[str]:
+    """
+    Extrae texto de un shape de PPTX de forma recursiva:
+    - Cuadros de texto / placeholders
+    - Tablas
+    - Shapes agrupados (GroupShape)
+    - SmartArt / GraphicFrame que expongan .shapes internas
+    """
+    textos: List[str] = []
+
+    # 1) TextFrame normal
+    try:
+        if getattr(shape, "has_text_frame", False) and shape.text_frame:
+            for para in shape.text_frame.paragraphs:
+                frags = [run.text for run in para.runs if run.text]
+                if frags:
+                    textos.append("".join(frags))
+    except Exception:
+        pass
+
+    # 2) Tablas
+    try:
+        if getattr(shape, "has_table", False) or getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.TABLE:
+            tbl = shape.table
+            for row in tbl.rows:
+                celdas = []
+                for cell in row.cells:
+                    t = (cell.text or "").strip()
+                    if t:
+                        celdas.append(t)
+                if celdas:
+                    textos.append(" | ".join(celdas))
+    except Exception:
+        pass
+
+    # 3) Shapes con subshapes (GroupShape, SmartArt, algunos GraphicFrame)
+    try:
+        subshapes = getattr(shape, "shapes", None)
+        if subshapes is not None:
+            for sub in subshapes:
+                textos.extend(_iter_shape_texts(sub))
+    except Exception:
+        pass
+
+    return textos
+
+
 def read_pptx_slides(bio: BytesIO) -> List[Tuple[int, str]]:
+    """
+    Lector PPTX mejorado:
+    - Recorre shapes de forma recursiva (_iter_shape_texts)
+    - Soporta: cuadros de texto, formas agrupadas, tablas, SmartArt (cuando expose shapes)
+    - Mantiene la lógica original de filtrado de bibliografía y fallback ZIP.
+    """
     try:
         prs = Presentation(bio)
         slides: List[Tuple[int, str]] = []
@@ -589,16 +645,16 @@ def read_pptx_slides(bio: BytesIO) -> List[Tuple[int, str]]:
 
         for s_idx, slide in enumerate(prs.slides, start=1):
             chunk: List[str] = []
+
             for sh in slide.shapes:
-                if (
-                    hasattr(sh, "has_text_frame")
-                    and sh.has_text_frame
-                    and sh.text_frame
-                    and sh.text_frame.text
-                ):
-                    raw = sh.text_frame.text or ""
+                # extrae todos los textos asociados a este shape (y subshapes)
+                for raw in _iter_shape_texts(sh):
+                    if not raw:
+                        continue
+
                     raw_norm = normalize_ws(raw)
 
+                    # heurística para descartar pie de página tipo bibliografía
                     try:
                         if slide_h and float(getattr(sh, "top", 0)) >= 0.75 * slide_h:
                             if (
@@ -808,7 +864,7 @@ def detect_modismos_in_pages(
                 # el texto coincidente con la misma posición en el original
                 match_text = text[start:end]
 
-                # --- NUEVO FILTRO: modismos con tilde ---
+                # filtro: modismos con tilde
                 if _has_accented_vowel(pat.modismo) and not _has_accented_vowel(match_text):
                     continue
 
@@ -856,10 +912,12 @@ def analyze_file(
 
     ext = os.path.splitext(file_name)[1].lower()
 
-    # Para TXT no excluimos páginas completas como bibliografía;
-    # solo se filtran fragmentos con is_reference_fragment.
+    # Detectar páginas de bibliografía
     skip_pages = detect_bibliography_pages(pages) if excluir_bibliografia else set()
-    if excluir_bibliografia and ext == ".txt":
+
+    # AJUSTE 1: para TXT, DOCX y PPTX NO excluimos páginas completas como bibliografía.
+    # Sólo se aplicará el filtro fino por fragmento (is_reference_fragment).
+    if excluir_bibliografia and ext in (".txt", ".docx", ".pptx"):
         skip_pages = set()
 
     st.session_state["_lang_code"] = lang_code
@@ -895,6 +953,7 @@ def analyze_file(
                 continue
 
             if excluir_bibliografia:
+                # Aquí sólo se filtra por fragmento, porque skip_pages puede estar vacío
                 if page_no in skip_pages:
                     continue
                 if is_reference_fragment(sentence) or is_reference_fragment(context):
@@ -975,8 +1034,14 @@ def analyze_file(
 
     # --- Modismos argentinos (capa extra) ---
     if analizar_modismos and lang_code.startswith("es") and modismos_patterns:
-        # Para TXT no pasamos páginas a excluir (ya filtramos por fragmento)
-        skip_for_modismos = skip_pages if (excluir_bibliografia and ext != ".txt") else None
+        # AJUSTE 2:
+        # Para TXT, DOCX y PPTX no excluimos páginas completas en la capa de modismos;
+        # sólo aplicamos el filtro por fragmento dentro de detect_modismos_in_pages.
+        if excluir_bibliografia and ext in (".txt", ".docx", ".pptx"):
+            skip_for_modismos = None
+        else:
+            skip_for_modismos = skip_pages
+
         df_mod = detect_modismos_in_pages(
             file_name=file_name,
             pages=pages,
@@ -1071,7 +1136,7 @@ def main():
     st.set_page_config(page_title="UTP GrammarScan — Local", page_icon="📂", layout="wide")
     st.title("📂 UTP GrammarScan — Ortografía y Gramática (PDF, DOCX, PPTX, TXT)")
 
-    # <<< NUEVO: se agrupan los parámetros en un expander >>>
+    # Parámetros
     with st.expander("Parámetros", expanded=False):
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
@@ -1088,7 +1153,6 @@ def main():
                 1, max(2, os.cpu_count() or 4), min(4, (os.cpu_count() or 4)),
                 help="Paraleliza el troceo por páginas. Las llamadas a LT se serializan para estabilidad."
             )
-    # <<< FIN CAMBIO >>>
 
     excluir_biblio = st.checkbox(
         "Excluir secciones/entradas de bibliografía (APA, MLA, IEEE, Vancouver)",
@@ -1264,6 +1328,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
