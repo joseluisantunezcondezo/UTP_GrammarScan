@@ -19,6 +19,7 @@ from docx.oxml.text.paragraph import CT_P
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from pptx import Presentation
+from dataclasses import dataclass  # <<< NUEVO
 
 
 # =========================
@@ -50,8 +51,108 @@ def safe_str(x) -> str:
         return ""
 
 
+# --- NUEVO: util para tildes en modismos ---
+ACCENTED_VOWELS = "áéíóúÁÉÍÓÚ"
+
+
+def _has_accented_vowel(s: str) -> bool:
+    return any(ch in ACCENTED_VOWELS for ch in s or "")
+
+
 # =========================
-# Detección de bibliografía (mejorada y con editoriales)
+# MODELOS Y CARGA DE MODISMOS
+# =========================
+
+@dataclass
+class ModismoPattern:
+    modismo: str
+    tipo: str           # 'literal' o 'regex'
+    patron: str         # patrón regex en texto
+    sugerencia: str
+    comentario: str
+    regex: re.Pattern   # patrón compilado
+
+
+def _normalize_regex_pattern(patron: str) -> str:
+    """
+    Normaliza el patrón leído desde Excel.
+    Convierte '\\\\' en '\\' para que secuencias como '\\b' se interpreten bien.
+    """
+    if not isinstance(patron, str):
+        patron = str(patron or "")
+    patron = patron.replace("\\\\", "\\")
+    return patron.strip()
+
+
+def load_modismos_from_excel(path: str) -> List[ModismoPattern]:
+    """
+    Lee 'modismos_ar.xlsx' y devuelve una lista de patrones compilados.
+    Columnas esperadas:
+      - modismo (str)
+      - tipo ('literal' o 'regex')
+      - patron (opcional si tipo = 'literal')
+      - sugerencia (str)
+      - comentario (opcional)
+    """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"No se encontró el archivo de modismos: {path}")
+
+    df = pd.read_excel(path)
+
+    required_cols = {"modismo", "tipo", "sugerencia"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Faltan columnas obligatorias en 'modismos_ar.xlsx': {missing}")
+
+    patterns: List[ModismoPattern] = []
+
+    for _, row in df.iterrows():
+        modismo = safe_str(row.get("modismo", "")).strip()
+        tipo = safe_str(row.get("tipo", "")).strip().lower()
+        sugerencia = safe_str(row.get("sugerencia", "")).strip()
+        comentario = safe_str(row.get("comentario", "")).strip()
+        patron_cfg = safe_str(row.get("patron", "")).strip()
+
+        if not modismo or not sugerencia:
+            continue
+
+        if tipo not in ("literal", "regex"):
+            tipo = "literal"
+
+        if tipo == "literal":
+            # patrón literal más robusto: frontera de palabra basada en no-\w
+            patron = r"(?<!\w)" + re.escape(modismo) + r"(?!\w)"
+        else:
+            base = patron_cfg if patron_cfg else modismo
+            patron = _normalize_regex_pattern(base)
+
+        try:
+            rx = re.compile(patron, flags=re.IGNORECASE | re.UNICODE)
+        except re.error as e:
+            print(f"[AVISO] Regex inválida en modismos_ar.xlsx para '{modismo}': {e}")
+            continue
+
+        patterns.append(
+            ModismoPattern(
+                modismo=modismo,
+                tipo=tipo,
+                patron=patron,
+                sugerencia=sugerencia,
+                comentario=comentario,
+                regex=rx,
+            )
+        )
+
+    return patterns
+
+
+@st.cache_resource(show_spinner=False)
+def get_modismos_patterns(modismos_path: str) -> List[ModismoPattern]:
+    return load_modismos_from_excel(modismos_path)
+
+
+# =========================
+# Detección de bibliografía
 # =========================
 
 HEAD_RE = re.compile(
@@ -65,24 +166,32 @@ HEAD_RE = re.compile(
 URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(19|20)\d{2}[a-z]?\b")
 DOI_URL_HINT_RE = re.compile(r"(doi:\s*10\.\d{4,9}/\S+|urn:\S+|hdl:\S+|https?://\S+)", re.IGNORECASE)
-JOURNAL_HINT_RE = re.compile(r"\b(vol\.?|no\.?|nº|n\.\s?o\.?|pp\.?|ed\.|edición|issn|isbn|issue|pages)\b", re.IGNORECASE)
+JOURNAL_HINT_RE = re.compile(
+    r"\b(vol\.?|no\.?|nº|n\.\s?o\.?|pp\.?|ed\.|edición|issn|isbn|issue|pages)\b",
+    re.IGNORECASE
+)
 PUBLISHER_HINT_RE = re.compile(
     r"\b(pearson|mcgraw[- ]?hill|elsevier|springer|wiley|cengage|prentice\s*hall|sage|oxford|cambridge|harvard\s*press|"
     r"editorial(?:es)?|ediciones?|universidad(?:\s+de)?\s+\w+)\b",
     re.IGNORECASE
 )
 ETAL_RE = re.compile(r"\bet\s+al\.?\b", re.IGNORECASE)
-BULLET_PREFIX_RE = re.compile(r"^\s*(?:[\u2022\u2023\u25E6\u2043\u2219\u25CF\u25AA\u25AB\u25A0\u25A1]|[-–—·•▪●◦‣])\s*")
+BULLET_PREFIX_RE = re.compile(
+    r"^\s*(?:[\u2022\u2023\u25E6\u2043\u2219\u25CF\u25AA\u25AB\u25A0\u25A1]|[-–—·•▪●◦‣])\s*"
+)
+
 
 def _strip_bullet(line: str) -> str:
     return BULLET_PREFIX_RE.sub("", line).strip()
 
-# Patrones de líneas de referencia (APA, MLA, IEEE, Vancouver y variantes comunes en PPT)
+
+# Patrones de líneas de referencia
 BIB_RE_LIST = [
     re.compile(
         r"^[A-ZÁÉÍÓÚÑ][a-záéíóúñ'\-]+,\s(?:[A-Z]\.\s?){1,4}(?:,\s(?:[A-Z]\.\s?)){0,3}"
         r"(?:\s(?:&|y|and)\s[A-ZÁÉÍÓÚÑ][a-záéíóúñ'\-]+,\s(?:[A-Z]\.\s?){1,4})*"
-        r"\s\(\d{4}[a-z]?\)\.\s", re.UNICODE
+        r"\s\(\d{4}[a-z]?\)\.\s",
+        re.UNICODE
     ),
     re.compile(
         r"^[A-ZÁÉÍÓÚÑ][a-záéíóúñ'\-]+,\s(?:[A-Z]\.\s?){1,4}.*\b(19|20)\d{2}[a-z]?\.\s*$",
@@ -93,12 +202,18 @@ BIB_RE_LIST = [
         re.UNICODE
     ),
     re.compile(r"^\[\d+\]\s.+"),
-    re.compile(r"^\d+\.\s[A-ZÁÉÍÓÚÑ][\w'\-]+.*\b(19|20)\d{2}\b.*\d+(?:\(\d+\))?:\d+(-\d+)?\.?$"),
-    re.compile(r"^[A-ZÁÉÍÓÚÑ][\w'\-]+.*\.\s+\S+\.\s+\(?\b(19|20)\d{2}\)?\.?$")
+    re.compile(
+        r"^\d+\.\s[A-ZÁÉÍÓÚÑ][\w'\-]+.*\b(19|20)\d{2}\b.*\d+(?:\(\d+\))?:\d+(-\d+)?\.?$"
+    ),
+    re.compile(
+        r"^[A-ZÁÉÍÓÚÑ][\w'\-]+.*\.\s+\S+\.\s+\(?\b(19|20)\d{2}\)?\.?$"
+    )
 ]
+
 
 def is_bibliography_heading(line: str) -> bool:
     return bool(HEAD_RE.match(line.strip()))
+
 
 def is_reference_line(line: str) -> bool:
     s = _strip_bullet(line)
@@ -107,12 +222,15 @@ def is_reference_line(line: str) -> bool:
     for rx in BIB_RE_LIST:
         if rx.search(s):
             return True
-    if YEAR_RE.search(s) and (DOI_URL_HINT_RE.search(s) or JOURNAL_HINT_RE.search(s) or PUBLISHER_HINT_RE.search(s)):
+    if YEAR_RE.search(s) and (
+        DOI_URL_HINT_RE.search(s) or JOURNAL_HINT_RE.search(s) or PUBLISHER_HINT_RE.search(s)
+    ):
         if s.count(",") >= 2 or ETAL_RE.search(s) or URL_RE.search(s):
             return True
     if URL_RE.search(s) and YEAR_RE.search(s):
         return True
     return False
+
 
 def detect_bibliography_pages(pages: List[Tuple[int, str]]) -> set:
     skip = set()
@@ -159,6 +277,7 @@ def detect_bibliography_pages(pages: List[Tuple[int, str]]) -> set:
 
     return skip
 
+
 def is_reference_fragment(text: str) -> bool:
     if not text:
         return False
@@ -177,8 +296,160 @@ def is_reference_fragment(text: str) -> bool:
             return True
 
     flat = " ".join(_strip_bullet(s) for s in text.split())
-    if YEAR_RE.search(flat) and (DOI_URL_HINT_RE.search(flat) or JOURNAL_HINT_RE.search(flat) or PUBLISHER_HINT_RE.search(flat)):
+    if YEAR_RE.search(flat) and (
+        DOI_URL_HINT_RE.search(flat) or JOURNAL_HINT_RE.search(flat) or PUBLISHER_HINT_RE.search(flat)
+    ):
         if flat.count(",") >= 2 or ETAL_RE.search(flat) or URL_RE.search(flat):
+            return True
+
+    return False
+
+
+# =========================
+# Detección de inglés, latín y código
+# =========================
+
+EN_COMMON_WORDS = {
+    "the", "and", "or", "but", "if", "then", "else", "when", "where", "who", "what",
+    "which", "while", "for", "from", "to", "in", "on", "at", "by", "of", "with",
+    "this", "that", "these", "those",
+    "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did",
+    "can", "could", "should", "would", "will", "may", "might", "must",
+    "not", "no", "yes", "a", "an", "as",
+    "we", "you", "they", "he", "she", "it", "his", "her", "their", "our", "us", "your",
+    "about", "into", "after", "before", "over", "under", "again", "further", "then",
+    "once", "here", "there", "because", "very", "also", "just", "such", "only",
+    "own", "same", "so", "than", "too", "more", "most", "less",
+    "any", "each", "few", "some", "other", "another",
+    "new", "use", "used", "using", "example",
+    "important", "information", "data", "result", "results",
+    "conclusion", "paper", "study", "work", "research",
+    "introduction", "method", "methods", "discussion", "however", "therefore",
+    "between", "within", "without"
+}
+
+EN_TOKEN_RE = re.compile(r"[a-zA-Z]+")
+
+
+def is_english_fragment(text: str) -> bool:
+    if not text:
+        return False
+
+    cleaned = URL_RE.sub(" ", text)
+    lower = cleaned.lower()
+
+    if any(ch in lower for ch in "áéíóúüñ"):
+        return False
+
+    tokens = EN_TOKEN_RE.findall(lower)
+    if len(tokens) < 4:
+        return False
+
+    en_hits = sum(1 for t in tokens if t in EN_COMMON_WORDS)
+    if en_hits == 0:
+        return False
+
+    en_ratio = en_hits / max(1, len(tokens))
+
+    ascii_tokens = [t for t in tokens if re.fullmatch(r"[a-z]+", t)]
+    ascii_ratio = len(ascii_tokens) / max(1, len(tokens))
+
+    if ascii_ratio >= 0.8 and en_ratio >= 0.25:
+        return True
+    if not any(ch in lower for ch in "áéíóúüñ") and en_ratio >= 0.35:
+        return True
+
+    return False
+
+
+LATIN_KEYWORDS = {
+    "ius", "honorarium", "civile", "sabinum", "edictum", "aedilium", "curulium",
+    "officio", "pronoconsulis", "corpus", "delicti", "mens", "rea",
+    "mutatis", "mutandis", "bonae", "fidei", "sui", "generis", "erga", "omnes",
+    "habeas"
+}
+
+
+def is_latin_fragment(text: str) -> bool:
+    if not text:
+        return False
+
+    cleaned = URL_RE.sub(" ", text)
+    lower = cleaned.lower()
+    tokens = EN_TOKEN_RE.findall(lower)
+    if not tokens:
+        return False
+
+    hits = sum(1 for t in tokens if t in LATIN_KEYWORDS)
+
+    if hits >= 1 and len(tokens) <= 4:
+        return True
+    if hits >= 2:
+        return True
+    if re.search(r"\bius\b", lower) and len(tokens) <= 6:
+        return True
+
+    return False
+
+
+CODE_SYMBOLS = set("{}[]();<>:=+-*/%&|^#!@$\"'\\")
+CODE_KEYWORDS = {
+    "public ", "private ", "protected ", "class ", "interface ", "implements ",
+    "extends ", "static ", "void ", "int ", "double ", "float ", "string ",
+    "boolean ", "bool ", "null", "true", "false",
+    "system.out", "console.log", "printf", "println",
+    "#include", "using ", "namespace ",
+    "def ", "import ", "from ", "return ",
+    "try:", "catch", "finally", "except ",
+    "=>", "lambda", "function "
+}
+
+
+def is_code_fragment(text: str) -> bool:
+    if not text:
+        return False
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+
+    code_like_lines = 0
+    total_nonempty = 0
+
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        total_nonempty += 1
+
+        lower = s.lower()
+
+        if any(kw in lower for kw in CODE_KEYWORDS):
+            code_like_lines += 1
+            continue
+
+        if s.endswith((";", "{", "}")):
+            code_like_lines += 1
+            continue
+
+        non_space = sum(1 for c in s if not c.isspace())
+        if non_space >= 6:
+            sym_count = sum(1 for c in s if c in CODE_SYMBOLS)
+            if sym_count / non_space > 0.3:
+                code_like_lines += 1
+                continue
+
+    if total_nonempty == 0:
+        return False
+
+    if code_like_lines >= 2 and code_like_lines / total_nonempty >= 0.5:
+        return True
+
+    all_non_space = sum(1 for c in text if not c.isspace())
+    if all_non_space >= 10:
+        all_sym = sum(1 for c in text if c in CODE_SYMBOLS)
+        if all_sym / all_non_space > 0.35:
             return True
 
     return False
@@ -224,7 +495,6 @@ def _paragraph_has_page_break(para: Paragraph) -> bool:
 
 
 def read_docx_pages(bio: BytesIO) -> List[Tuple[int, str]]:
-    """Divide un DOCX en 'páginas' aproximadas usando saltos de página y tablas."""
     doc = Document(bio)
     pages: List[Tuple[int, str]] = []
     buff: List[str] = []
@@ -245,7 +515,7 @@ def read_docx_pages(bio: BytesIO) -> List[Tuple[int, str]]:
             if _paragraph_has_page_break(b):
                 flush()
                 page_no += 1
-        else:  # Table
+        else:
             for row in b.rows:
                 row_text = " | ".join(
                     (c.text or "").strip() for c in row.cells if (c.text or "").strip()
@@ -255,7 +525,7 @@ def read_docx_pages(bio: BytesIO) -> List[Tuple[int, str]]:
 
     flush()
 
-    if not pages:  # fallback
+    if not pages:
         flat = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         if flat.strip():
             pages = [(1, normalize_ws(flat))]
@@ -264,32 +534,35 @@ def read_docx_pages(bio: BytesIO) -> List[Tuple[int, str]]:
 
 
 def _clean_reference_lines_block(text: str) -> str:
-    """Elimina renglones que parezcan citas dentro de un bloque de texto."""
     kept = []
     for ln in (text or "").splitlines():
         s = normalize_ws(ln)
         if not s:
             continue
-        if is_bibliography_heading(s) or is_reference_line(s) or (PUBLISHER_HINT_RE.search(s) and YEAR_RE.search(s)):
+        if (
+            is_bibliography_heading(s)
+            or is_reference_line(s)
+            or (PUBLISHER_HINT_RE.search(s) and YEAR_RE.search(s))
+            or is_code_fragment(s)
+        ):
             continue
         kept.append(s)
     return "\n".join(kept).strip()
 
 
 def _read_pptx_via_zip(bio: BytesIO) -> List[Tuple[int, str]]:
-    """
-    Fallback tolerante a corrupción:
-    lee directamente los XML de 'ppt/slides/slideN.xml' y extrae <a:t>.
-    Evita tocar 'ppt/fonts/*' (donde suele estar la corrupción).
-    """
     slides: List[Tuple[int, str]] = []
     bio.seek(0)
     with zipfile.ZipFile(bio) as z:
-        names = [n for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")]
-        # Ordenar por número de slide
+        names = [
+            n for n in z.namelist()
+            if n.startswith("ppt/slides/slide") and n.endswith(".xml")
+        ]
+
         def slide_no(name: str) -> int:
             m = re.search(r"slide(\d+)\.xml$", name)
             return int(m.group(1)) if m else 0
+
         names.sort(key=slide_no)
 
         A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -304,18 +577,11 @@ def _read_pptx_via_zip(bio: BytesIO) -> List[Tuple[int, str]]:
                 if cleaned:
                     slides.append((idx, cleaned))
             except Exception:
-                # Si una slide puntual está dañada, la omitimos y seguimos
                 continue
     return slides
 
 
 def read_pptx_slides(bio: BytesIO) -> List[Tuple[int, str]]:
-    """
-    Lector PPTX robusto:
-    1) intenta con python-pptx
-    2) si falla (ej. BadZipFile/CRC), cae a lectura directa del ZIP
-    """
-    # --- intento 1: python-pptx ---
     try:
         prs = Presentation(bio)
         slides: List[Tuple[int, str]] = []
@@ -324,19 +590,29 @@ def read_pptx_slides(bio: BytesIO) -> List[Tuple[int, str]]:
         for s_idx, slide in enumerate(prs.slides, start=1):
             chunk: List[str] = []
             for sh in slide.shapes:
-                if hasattr(sh, "has_text_frame") and sh.has_text_frame and sh.text_frame and sh.text_frame.text:
+                if (
+                    hasattr(sh, "has_text_frame")
+                    and sh.has_text_frame
+                    and sh.text_frame
+                    and sh.text_frame.text
+                ):
                     raw = sh.text_frame.text or ""
                     raw_norm = normalize_ws(raw)
 
-                    # 1) Si el shape está en el 25% inferior y parece referencia -> descartar shape completo
                     try:
                         if slide_h and float(getattr(sh, "top", 0)) >= 0.75 * slide_h:
-                            if is_reference_fragment(raw_norm) or URL_RE.search(raw_norm) or (PUBLISHER_HINT_RE.search(raw_norm) and YEAR_RE.search(raw_norm)):
+                            if (
+                                is_reference_fragment(raw_norm)
+                                or URL_RE.search(raw_norm)
+                                or (
+                                    PUBLISHER_HINT_RE.search(raw_norm)
+                                    and YEAR_RE.search(raw_norm)
+                                )
+                            ):
                                 continue
                     except Exception:
                         pass
 
-                    # 2) Si no, limpiar renglones de referencia dentro del shape
                     cleaned = _clean_reference_lines_block(raw_norm)
                     if cleaned:
                         chunk.append(cleaned)
@@ -347,11 +623,9 @@ def read_pptx_slides(bio: BytesIO) -> List[Tuple[int, str]]:
         return slides
 
     except Exception:
-        # --- intento 2: fallback vía ZIP (tolerante a CRC roto) ---
         try:
             return _read_pptx_via_zip(bio)
         except Exception as e2:
-            # Si también falla, propagamos para que lo capture la capa superior por archivo.
             raise e2
 
 
@@ -405,7 +679,9 @@ def extract_pages(file_bytes: bytes, file_name: str) -> Tuple[List[Tuple[int, st
 # Concatenación y límites
 # =========================
 
-def build_global_text(pages: List[Tuple[int, str]]) -> Tuple[str, List[int], List[Tuple[int, int, int]]]:
+def build_global_text(
+    pages: List[Tuple[int, str]]
+) -> Tuple[str, List[int], List[Tuple[int, int, int]]]:
     parts: List[str] = []
     starts: List[int] = []
     bounds: List[Tuple[int, int, int]] = []
@@ -454,7 +730,7 @@ def page_for_offset(bounds: List[Tuple[int, int, int]], offset: int) -> int:
 
 
 # =========================
-# LanguageTool local (única instancia)
+# LanguageTool local
 # =========================
 
 @st.cache_resource(show_spinner=False)
@@ -465,12 +741,8 @@ def get_language_tool(lang_code: str):
     return lt.LanguageTool(lang_code)
 
 
-LT_LOCK = threading.Lock()  # serializa check()
+LT_LOCK = threading.Lock()
 
-
-# =========================
-# Análisis con reintentos
-# =========================
 
 def analyze_text(tool, text: str, retries: int = 2, sleep: float = 0.8) -> list:
     if not text.strip():
@@ -492,19 +764,103 @@ def analyze_text(tool, text: str, retries: int = 2, sleep: float = 0.8) -> list:
     raise RuntimeError(f"Fallo LanguageTool local tras reintentos: {last_err}")
 
 
+# =========================
+# Capa de modismos argentinos
+# =========================
+
+def detect_modismos_in_pages(
+    file_name: str,
+    pages: List[Tuple[int, str]],
+    unit_label: str,
+    patterns: List[ModismoPattern],
+    skip_pages: set | None = None,
+) -> pd.DataFrame:
+    """
+    Recorre cada página/diapositiva y detecta modismos argentinos usando los patrones.
+    Devuelve un DataFrame con las mismas columnas que LanguageTool.
+    """
+    if not patterns:
+        return pd.DataFrame([])
+
+    skip_pages = skip_pages or set()
+    rows: List[Dict[str, Any]] = []
+
+    for page_no, text in pages:
+        if page_no in skip_pages:
+            continue
+        if not text.strip():
+            continue
+
+        lower = text.lower()
+
+        for pat in patterns:
+            for m in pat.regex.finditer(lower):
+                start, end = m.span()
+                # contexto alrededor del match
+                ctx_start = max(0, start - 60)
+                ctx_end = min(len(text), end + 60)
+                contexto = text[ctx_start:ctx_end]
+
+                # filtro extra: no marcar si el contexto parece bibliografía
+                if is_reference_fragment(contexto):
+                    continue
+
+                # el texto coincidente con la misma posición en el original
+                match_text = text[start:end]
+
+                # --- NUEVO FILTRO: modismos con tilde ---
+                if _has_accented_vowel(pat.modismo) and not _has_accented_vowel(match_text):
+                    continue
+
+                mensaje = (
+                    f"Uso de modismo argentino «{match_text}». "
+                    f"Sugerencia: «{pat.sugerencia}»."
+                )
+
+                rows.append({
+                    "Archivo": file_name,
+                    "Página/Diapositiva": page_no,
+                    "BloqueTipo": unit_label,
+                    "Mensaje": mensaje,
+                    "Sugerencias": pat.sugerencia,
+                    "Oración": contexto,
+                    "Contexto": contexto,
+                    "Regla": "MODISMO_AR",
+                    "Categoría": f"UTP_CUSTOM: Modismos argentinos ({pat.modismo})",
+                })
+
+    if not rows:
+        return pd.DataFrame([])
+
+    df_mod = pd.DataFrame.from_records(rows).drop_duplicates()
+    return df_mod
+
+
+# =========================
+# Análisis de archivo completo
+# =========================
+
 def analyze_file(
     file_name: str,
     file_bytes: bytes,
     lang_code: str,
     max_chars_call: int,
     workers: int,
-    excluir_bibliografia: bool = True
+    excluir_bibliografia: bool = True,
+    modismos_patterns: List[ModismoPattern] | None = None,
+    analizar_modismos: bool = False,
 ) -> pd.DataFrame:
     pages, unit_label = extract_pages(file_bytes, file_name)
     if not pages:
         return pd.DataFrame([])
 
+    ext = os.path.splitext(file_name)[1].lower()
+
+    # Para TXT no excluimos páginas completas como bibliografía;
+    # solo se filtran fragmentos con is_reference_fragment.
     skip_pages = detect_bibliography_pages(pages) if excluir_bibliografia else set()
+    if excluir_bibliografia and ext == ".txt":
+        skip_pages = set()
 
     st.session_state["_lang_code"] = lang_code
     _, starts, bounds = build_global_text(pages)
@@ -517,6 +873,7 @@ def analyze_file(
     done = 0
 
     def worker(rng: Tuple[int, int]):
+        nonlocal done
         i, j = rng
         group_start = starts[i]
         txt = PAGE_SEP.join([pages[k][1] for k in range(i, j)])
@@ -527,11 +884,15 @@ def analyze_file(
                 off = int(getattr(m, "offset", -1) or -1)
             except Exception:
                 off = -1
+
             global_off = group_start + (off if off >= 0 else 0)
             page_no = page_for_offset(bounds, global_off)
 
             sentence = safe_str(getattr(m, "sentence", ""))
             context = safe_str(getattr(m, "context", ""))
+
+            if URL_RE.search(sentence) or URL_RE.search(context):
+                continue
 
             if excluir_bibliografia:
                 if page_no in skip_pages:
@@ -539,13 +900,23 @@ def analyze_file(
                 if is_reference_fragment(sentence) or is_reference_fragment(context):
                     continue
 
+            if is_code_fragment(sentence) or is_code_fragment(context):
+                continue
+
+            if lang_code.startswith("es"):
+                if is_english_fragment(sentence) or is_english_fragment(context):
+                    continue
+                if is_latin_fragment(sentence) or is_latin_fragment(context):
+                    continue
+
             local_rows.append({
                 "Archivo": file_name,
                 "Página/Diapositiva": page_no,
                 "BloqueTipo": unit_label,
                 "Mensaje": safe_str(getattr(m, "message", "")),
-                "Sugerencias": ", ".join(getattr(m, "replacements", [])[:5])
-                               if isinstance(getattr(m, "replacements", []), list) else "",
+                "Sugerencias": ", ".join(
+                    getattr(m, "replacements", [])[:5]
+                ) if isinstance(getattr(m, "replacements", []), list) else "",
                 "Oración": sentence,
                 "Contexto": context,
                 "Regla": safe_str(getattr(m, "ruleId", "")),
@@ -565,26 +936,76 @@ def analyze_file(
     prog.progress(1.0, text=f"{file_name}: completado")
 
     if not rows:
+        df_lt = pd.DataFrame([])
+    else:
+        df_lt = pd.DataFrame.from_records(rows)
+
+    if not df_lt.empty:
+        if excluir_bibliografia:
+            mask_ref = (
+                df_lt["Oración"].fillna("").apply(is_reference_fragment)
+                | df_lt["Contexto"].fillna("").apply(is_reference_fragment)
+            )
+            df_lt = df_lt.loc[~mask_ref].copy()
+
+        mask_code = (
+            df_lt["Oración"].fillna("").apply(is_code_fragment)
+            | df_lt["Contexto"].fillna("").apply(is_code_fragment)
+        )
+        df_lt = df_lt.loc[~mask_code].copy()
+
+        if lang_code.startswith("es"):
+            mask_eng = (
+                df_lt["Oración"].fillna("").apply(is_english_fragment)
+                | df_lt["Contexto"].fillna("").apply(is_english_fragment)
+            )
+            df_lt = df_lt.loc[~mask_eng].copy()
+
+            mask_lat = (
+                df_lt["Oración"].fillna("").apply(is_latin_fragment)
+                | df_lt["Contexto"].fillna("").apply(is_latin_fragment)
+            )
+            df_lt = df_lt.loc[~mask_lat].copy()
+
+        mask_url = (
+            df_lt["Oración"].fillna("").str.contains(URL_RE)
+            | df_lt["Contexto"].fillna("").str.contains(URL_RE)
+        )
+        df_lt = df_lt.loc[~mask_url].copy()
+
+    # --- Modismos argentinos (capa extra) ---
+    if analizar_modismos and lang_code.startswith("es") and modismos_patterns:
+        # Para TXT no pasamos páginas a excluir (ya filtramos por fragmento)
+        skip_for_modismos = skip_pages if (excluir_bibliografia and ext != ".txt") else None
+        df_mod = detect_modismos_in_pages(
+            file_name=file_name,
+            pages=pages,
+            unit_label=unit_label,
+            patterns=modismos_patterns,
+            skip_pages=skip_for_modismos,
+        )
+    else:
+        df_mod = pd.DataFrame([])
+
+    # Unificar resultados
+    if df_lt is None or df_lt.empty:
+        final_df = df_mod
+    elif df_mod is None or df_mod.empty:
+        final_df = df_lt
+    else:
+        final_df = pd.concat([df_lt, df_mod], ignore_index=True)
+
+    if final_df is None or final_df.empty:
         return pd.DataFrame([])
 
-    df = pd.DataFrame.from_records(rows)
-
-    # Post-filtro extra por si algo quedó
-    if excluir_bibliografia and not df.empty:
-        mask_ref = (
-            df["Oración"].fillna("").apply(is_reference_fragment) |
-            df["Contexto"].fillna("").apply(is_reference_fragment)
-        )
-        df = df.loc[~mask_ref].copy()
-
-    df.sort_values(["Archivo", "Página/Diapositiva"], inplace=True)
-    df.drop_duplicates(
+    final_df.sort_values(["Archivo", "Página/Diapositiva"], inplace=True)
+    final_df.drop_duplicates(
         subset=["Archivo", "Página/Diapositiva", "Mensaje", "Oración", "Contexto", "Regla"],
         keep="first",
         inplace=True,
     )
-    df.reset_index(drop=True, inplace=True)
-    return df
+    final_df.reset_index(drop=True, inplace=True)
+    return final_df
 
 
 # =========================
@@ -592,20 +1013,13 @@ def analyze_file(
 # =========================
 
 def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFrame) -> bytes:
-    """
-    Genera un Excel con:
-      - Resultados          (detalle de incidencias)
-      - ResumenIncidencias  (sólo arch. con incidencias)
-      - ResumenCompleto     (todos los archivos procesados, incl. 0 y errores)
-    """
     out = BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as w:
 
-        # --- Resultados (detalle) ---
         if resultados_df is None or resultados_df.empty:
             tmp = pd.DataFrame(columns=[
-                "Archivo","Página/Diapositiva","BloqueTipo","Mensaje",
-                "Sugerencias","Oración","Contexto","Regla","Categoría"
+                "Archivo", "Página/Diapositiva", "BloqueTipo", "Mensaje",
+                "Sugerencias", "Oración", "Contexto", "Regla", "Categoría"
             ])
             tmp.to_excel(w, index=False, sheet_name="Resultados")
             ws = w.sheets["Resultados"]
@@ -615,27 +1029,31 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
             ws = w.sheets["Resultados"]
             for i, col in enumerate(resultados_df.columns):
                 try:
-                    width = min(60, max(12, int(resultados_df[col].astype(str).str.len().quantile(0.9)) + 2))
+                    width = min(
+                        60,
+                        max(
+                            12,
+                            int(resultados_df[col].astype(str).str.len().quantile(0.9)) + 2
+                        )
+                    )
                 except Exception:
                     width = 22
                 ws.set_column(i, i, width)
 
-        # --- Resumen incidencias (como antes) ---
         if resultados_df is None or resultados_df.empty:
-            resumen_inc = pd.DataFrame(columns=["Archivo","TotalIncidencias"])
+            resumen_inc = pd.DataFrame(columns=["Archivo", "TotalIncidencias"])
         else:
             resumen_inc = (
                 resultados_df.groupby("Archivo")
-                    .size()
-                    .reset_index(name="TotalIncidencias")
-                    .sort_values("TotalIncidencias", ascending=False)
+                .size()
+                .reset_index(name="TotalIncidencias")
+                .sort_values("TotalIncidencias", ascending=False)
             )
         resumen_inc.to_excel(w, index=False, sheet_name="ResumenIncidencias")
         ws2 = w.sheets["ResumenIncidencias"]
         ws2.set_column(0, 0, 40)
         ws2.set_column(1, 1, 22)
 
-        # --- Resumen completo (incluye 0 y errores) ---
         resumen_completo_df.to_excel(w, index=False, sheet_name="ResumenCompleto")
         ws3 = w.sheets["ResumenCompleto"]
         for i, col in enumerate(resumen_completo_df.columns):
@@ -653,25 +1071,33 @@ def main():
     st.set_page_config(page_title="UTP GrammarScan — Local", page_icon="📂", layout="wide")
     st.title("📂 UTP GrammarScan — Ortografía y Gramática (PDF, DOCX, PPTX, TXT)")
 
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        lang_code = st.selectbox("Idioma", ["es", "en-US", "pt-BR", "fr", "de"], index=0)
-    with c2:
-        max_chars_call = st.number_input(
-            "Máx. caracteres por llamada (LOCAL)",
-            5000, 80000, 30000,
-            help="Se agrupan páginas/diapos hasta este límite para mantener contexto."
-        )
-    with c3:
-        workers = st.slider(
-            "Trabajadores (hilos)",
-            1, max(2, os.cpu_count() or 4), min(4, (os.cpu_count() or 4)),
-            help="Paraleliza el troceo por páginas. Las llamadas a LT se serializan para estabilidad."
-        )
+    # <<< NUEVO: se agrupan los parámetros en un expander >>>
+    with st.expander("Parámetros", expanded=False):
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
+            lang_code = st.selectbox("Idioma", ["es", "en-US", "pt-BR", "fr", "de"], index=0)
+        with c2:
+            max_chars_call = st.number_input(
+                "Máx. caracteres por llamada (LOCAL)",
+                5000, 80000, 30000,
+                help="Se agrupan páginas/diapos hasta este límite para mantener contexto."
+            )
+        with c3:
+            workers = st.slider(
+                "Trabajadores (hilos)",
+                1, max(2, os.cpu_count() or 4), min(4, (os.cpu_count() or 4)),
+                help="Paraleliza el troceo por páginas. Las llamadas a LT se serializan para estabilidad."
+            )
+    # <<< FIN CAMBIO >>>
 
     excluir_biblio = st.checkbox(
         "Excluir secciones/entradas de bibliografía (APA, MLA, IEEE, Vancouver)",
         value=True
+    )
+
+    analizar_modismos = st.checkbox(
+        "Detectar modismos argentinos (modismos_ar.xlsx)",
+        value=True if lang_code.startswith("es") else False
     )
 
     with st.expander("Estado del motor"):
@@ -693,10 +1119,22 @@ def main():
             st.stop()
 
         try:
-            _ = get_language_tool(lang_code)  # warm-up
+            _ = get_language_tool(lang_code)
         except Exception as e:
             st.error(f"No se pudo iniciar LanguageTool local: {e}")
             st.stop()
+
+        # Carga de modismos (si aplica)
+        modismos_patterns: List[ModismoPattern] = []
+        if analizar_modismos and lang_code.startswith("es"):
+            script_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+            modismos_path = os.path.join(script_dir, "modismos_ar.xlsx")
+            try:
+                modismos_patterns = get_modismos_patterns(modismos_path)
+                st.success(f"Diccionario de modismos cargado: {len(modismos_patterns)} entradas.")
+            except Exception as e:
+                st.error(f"No se pudieron cargar los modismos desde '{modismos_path}': {e}")
+                modismos_patterns = []
 
         total_seleccionados = len(ups)
         all_dfs: List[pd.DataFrame] = []
@@ -706,13 +1144,25 @@ def main():
         t0 = time.time()
 
         for i, up in enumerate(ups, start=1):
-            overall.progress((i - 1) / total_seleccionados, text=f"Procesando {up.name} ({i}/{total_seleccionados})")
+            overall.progress(
+                (i - 1) / total_seleccionados,
+                text=f"Procesando {up.name} ({i}/{total_seleccionados})"
+            )
 
             try:
                 data = up.read()
                 ext = os.path.splitext(up.name)[1].lower()
 
-                df = analyze_file(up.name, data, lang_code, max_chars_call, workers, excluir_bibliografia=excluir_biblio)
+                df = analyze_file(
+                    up.name,
+                    data,
+                    lang_code,
+                    max_chars_call,
+                    workers,
+                    excluir_bibliografia=excluir_biblio,
+                    modismos_patterns=modismos_patterns,
+                    analizar_modismos=analizar_modismos,
+                )
 
                 if not df.empty:
                     all_dfs.append(df)
@@ -733,7 +1183,6 @@ def main():
                     })
 
             except Exception as e:
-                # Captura cualquier error (p. ej., PPTX con CRC roto + fallback fallido) y continúa
                 resumen_rows.append({
                     "Archivo": up.name,
                     "Extension": os.path.splitext(up.name)[1].lower(),
@@ -747,18 +1196,28 @@ def main():
 
         resumen_completo_df = pd.DataFrame(resumen_rows)
 
-        # Métricas
-        n_inc = int(resumen_completo_df.query("Estado == 'Con incidencias'")["Archivo"].nunique())
-        n_zero = int(resumen_completo_df.query("Estado == 'Sin incidencias o sin texto'")["Archivo"].nunique())
-        n_err = int(resumen_completo_df.query("Estado == 'Error'")["Archivo"].nunique())
+        n_inc = int(
+            resumen_completo_df.query("Estado == 'Con incidencias'")["Archivo"].nunique()
+        )
+        n_zero = int(
+            resumen_completo_df.query(
+                "Estado == 'Sin incidencias o sin texto'"
+            )["Archivo"].nunique()
+        )
+        n_err = int(
+            resumen_completo_df.query("Estado == 'Error'")["Archivo"].nunique()
+        )
 
         cA, cB, cC, cD = st.columns(4)
-        with cA: st.metric("Seleccionados", total_seleccionados)
-        with cB: st.metric("Con incidencias", n_inc)
-        with cC: st.metric("Sin incidencias / sin texto", n_zero)
-        with cD: st.metric("Errores", n_err)
+        with cA:
+            st.metric("Seleccionados", total_seleccionados)
+        with cB:
+            st.metric("Con incidencias", n_inc)
+        with cC:
+            st.metric("Sin incidencias / sin texto", n_zero)
+        with cD:
+            st.metric("Errores", n_err)
 
-        # Resultados detallados
         if any(len(df) for df in all_dfs):
             final_df = pd.concat(all_dfs, ignore_index=True)
             st.subheader("📑 Resultados (detalle de incidencias)")
@@ -767,9 +1226,9 @@ def main():
             st.markdown("**Resumen por archivo (sólo con incidencias)**")
             resumen_inc = (
                 final_df.groupby("Archivo")
-                        .size()
-                        .reset_index(name="TotalIncidencias")
-                        .sort_values("TotalIncidencias", ascending=False)
+                .size()
+                .reset_index(name="TotalIncidencias")
+                .sort_values("TotalIncidencias", ascending=False)
             )
             st.dataframe(resumen_inc, use_container_width=True, hide_index=True)
         else:
@@ -779,14 +1238,16 @@ def main():
         st.markdown("**Resumen completo de archivos** (incluye 0 incidencias y errores)")
         st.dataframe(resumen_completo_df, use_container_width=True, hide_index=True)
 
-        # Descargas
         cD1, cD2 = st.columns(2)
         with cD1:
             st.download_button(
                 "⬇️ Excel (Resultados + Resúmenes)",
                 data=to_excel_bytes(final_df, resumen_completo_df),
                 file_name="UTP_GrammarScan_Resultados.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                    "sheet"
+                ),
                 use_container_width=True
             )
         with cD2:
@@ -803,6 +1264,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
