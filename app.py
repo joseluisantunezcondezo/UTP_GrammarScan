@@ -26,7 +26,6 @@ from dataclasses import dataclass
 # ======================================================
 # ESTILOS GLOBALES (basados en módulo Consignas)
 # ======================================================
-
 def apply_global_styles():
     st.markdown(
         """
@@ -224,7 +223,8 @@ def apply_global_styles():
             inset: 0;
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;  /* antes: center */
+            padding-left: 12px;           /* sangría desde el borde izquierdo */
             font-size: 0.9rem;
             font-weight: 700;
             color: #ffffff;
@@ -1750,8 +1750,11 @@ def main():
         render_report_grammarscan()
 
 
+
 if __name__ == "__main__":
     main()
+
+
 
 
 
