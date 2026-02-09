@@ -4,11 +4,12 @@ import time
 import shutil
 import threading
 import zipfile
+from pathlib import Path
 from xml.etree import ElementTree as ET
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Callable
 
 import pandas as pd
 import pdfplumber
@@ -223,8 +224,8 @@ def apply_global_styles():
             inset: 0;
             display: flex;
             align-items: center;
-            justify-content: flex-start;  /* antes: center */
-            padding-left: 12px;           /* sangría desde el borde izquierdo */
+            justify-content: flex-start;
+            padding-left: 12px;
             font-size: 0.9rem;
             font-weight: 700;
             color: #ffffff;
@@ -347,6 +348,7 @@ def render_home():
 
 LINES_PER_TXT_PAGE = 50
 PAGE_SEP = "\n\f\n"
+ALLOWED_DOC_EXTS = {".pdf", ".docx", ".pptx", ".txt"}
 
 WS_MULTI_RE = re.compile(r"[ \t]+")
 NL_3PLUS_RE = re.compile(r"\n{3,}")
@@ -385,6 +387,17 @@ class ModismoPattern:
     sugerencia: str
     comentario: str
     regex: re.Pattern
+
+
+@dataclass
+class LogicalFileSource:
+    """
+    Representa un "archivo lógico" a procesar, independientemente de si viene
+    de un archivo subido directamente o de dentro de un ZIP.
+    """
+    display_name: str
+    ext: str
+    read_bytes: Callable[[], bytes]
 
 
 def _normalize_regex_pattern(patron: str) -> str:
@@ -1425,6 +1438,84 @@ def reset_grammarscan_state():
 
 
 # ======================================================
+# SOPORTE PARA LOTES GRANDES (ZIP -> archivos lógicos)
+# ======================================================
+
+def expand_uploaded_files(
+    ups,
+    max_logical_files: int = 400,
+) -> Tuple[List[LogicalFileSource], bool]:
+    """
+    A partir de la lista de UploadedFile:
+    - Acepta PDFs, DOCX, PPTX, TXT directamente.
+    - Expande archivos .zip y toma de dentro solo los tipos soportados.
+    Devuelve:
+    - lista de archivos lógicos a procesar
+    - flag indicando si se truncó por max_logical_files
+    """
+    logical_files: List[LogicalFileSource] = []
+    truncated = False
+
+    for up in ups:
+        name = up.name
+        ext = os.path.splitext(name)[1].lower()
+
+        # ZIP: expandir en archivos lógicos
+        if ext == ".zip":
+            try:
+                zip_bytes = up.getvalue()
+                with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        inner_ext = os.path.splitext(info.filename)[1].lower()
+                        if inner_ext not in ALLOWED_DOC_EXTS:
+                            continue
+
+                        display_name = f"{Path(name).stem}/{Path(info.filename).name}"
+
+                        def _make_reader(zbytes: bytes, inner_name: str) -> Callable[[], bytes]:
+                            def _reader() -> bytes:
+                                with zipfile.ZipFile(BytesIO(zbytes)) as _zf:
+                                    return _zf.read(inner_name)
+                            return _reader
+
+                        logical_files.append(
+                            LogicalFileSource(
+                                display_name=display_name,
+                                ext=inner_ext,
+                                read_bytes=_make_reader(zip_bytes, info.filename),
+                            )
+                        )
+                        if len(logical_files) >= max_logical_files:
+                            truncated = True
+                            break
+                if truncated:
+                    break
+            except Exception as e:
+                st.error(f"Error leyendo ZIP '{name}': {e}")
+                continue
+
+        # Archivo individual soportado
+        elif ext in ALLOWED_DOC_EXTS:
+            logical_files.append(
+                LogicalFileSource(
+                    display_name=name,
+                    ext=ext,
+                    read_bytes=up.getvalue,
+                )
+            )
+            if len(logical_files) >= max_logical_files:
+                truncated = True
+                break
+
+        else:
+            st.warning(f"Archivo omitido por extensión no soportada: {name}")
+
+    return logical_files, truncated
+
+
+# ======================================================
 # LÓGICA DE PROCESAMIENTO (auto, sin botón)
 # ======================================================
 
@@ -1453,7 +1544,20 @@ def process_grammarscan_files(
             st.error(f"No se pudieron cargar los modismos desde '{modismos_path}': {e}")
             modismos_patterns = []
 
-    total_seleccionados = len(ups)
+    # Expandir ZIPs en archivos lógicos
+    logical_files, truncated = expand_uploaded_files(ups, max_logical_files=400)
+    total_seleccionados = len(logical_files)
+
+    if truncated:
+        st.warning(
+            f"Se detectó un lote muy grande de documentos. "
+            f"Solo se procesarán los primeros {total_seleccionados} archivos lógicos. "
+            "Sube el resto en un segundo lote para evitar bloqueos en Streamlit Cloud."
+        )
+
+    if total_seleccionados == 0:
+        return pd.DataFrame([]), pd.DataFrame([]), {"total": 0, "n_inc": 0, "n_zero": 0, "n_err": 0}, 0.0
+
     all_dfs: List[pd.DataFrame] = []
     resumen_rows: List[Dict[str, Any]] = []
 
@@ -1467,21 +1571,20 @@ def process_grammarscan_files(
 
     t0 = time.time()
 
-    for i, up in enumerate(ups, start=1):
-        # Antes de procesar el archivo, mostramos el avance previo
+    for i, lf in enumerate(logical_files, start=1):
         render_task_progress_bar(
             progress_ph,
-            f"Procesando archivo {i}/{total_seleccionados}: {up.name}",
+            f"Procesando archivo {i}/{total_seleccionados}: {lf.display_name}",
             i - 1,
             total_seleccionados,
         )
 
         try:
-            data = up.read()
-            ext = os.path.splitext(up.name)[1].lower()
+            data = lf.read_bytes()
+            ext = lf.ext
 
             df = analyze_file(
-                up.name,
+                lf.display_name,
                 data,
                 lang_code,
                 max_chars_call,
@@ -1494,7 +1597,7 @@ def process_grammarscan_files(
             if not df.empty:
                 all_dfs.append(df)
                 resumen_rows.append({
-                    "Archivo": up.name,
+                    "Archivo": lf.display_name,
                     "Extension": ext,
                     "Estado": "Con incidencias",
                     "TotalIncidencias": int(df.shape[0]),
@@ -1502,7 +1605,7 @@ def process_grammarscan_files(
                 })
             else:
                 resumen_rows.append({
-                    "Archivo": up.name,
+                    "Archivo": lf.display_name,
                     "Extension": ext,
                     "Estado": "Sin incidencias o sin texto",
                     "TotalIncidencias": 0,
@@ -1511,23 +1614,21 @@ def process_grammarscan_files(
 
         except Exception as e:
             resumen_rows.append({
-                "Archivo": up.name,
-                "Extension": os.path.splitext(up.name)[1].lower(),
+                "Archivo": lf.display_name,
+                "Extension": lf.ext,
                 "Estado": "Error",
                 "TotalIncidencias": None,
                 "Detalle": safe_str(e)
             })
-            st.error(f"Error procesando {up.name}: {e}")
+            st.error(f"Error procesando {lf.display_name}: {e}")
 
-        # Después de procesar el archivo, actualizamos el avance
         render_task_progress_bar(
             progress_ph,
-            f"Procesando archivo {i}/{total_seleccionados}: {up.name}",
+            f"Procesando archivo {i}/{total_seleccionados}: {lf.display_name}",
             i,
             total_seleccionados,
         )
 
-    # Al finalizar, dejamos la barra en 100% con mensaje de cierre
     render_task_progress_bar(
         progress_ph,
         "Análisis finalizado",
@@ -1623,20 +1724,25 @@ def render_report_grammarscan():
 
     uploader_key = f"gs_uploader_{st.session_state['gs_uploader_key']}"
     ups = st.file_uploader(
-        "1 Sube uno o varios archivos (.pdf, .docx, .pptx, .txt)",
-        type=["pdf", "docx", "pptx", "txt"],
+        "1 Sube uno o varios archivos (.pdf, .docx, .pptx, .txt, .zip)",
+        type=["pdf", "docx", "pptx", "txt", "zip"],
         accept_multiple_files=True,
         key=uploader_key,
     )
 
     have_files = bool(ups)
     step1_ph.markdown(
-        render_step_header_html("1", "Sube uno o varios archivos (.pdf, .docx, .pptx, .txt)", have_files),
+        render_step_header_html("1", "Sube uno o varios archivos (.pdf, .docx, .pptx, .txt, .zip)", have_files),
         unsafe_allow_html=True,
     )
 
     if have_files:
         st.success(f"{len(ups)} archivo(s) seleccionado(s).")
+        st.caption(
+            "Para lotes muy grandes (por ejemplo más de 100 documentos) es más estable subir "
+            "uno o varios archivos .zip que contengan los PDF/DOCX/PPTX/TXT o, si es posible, "
+            "versiones .txt ligeras de cada documento."
+        )
     else:
         st.info("Sube al menos un archivo para iniciar el análisis automático.")
 
@@ -1750,9 +1856,10 @@ def main():
         render_report_grammarscan()
 
 
-
 if __name__ == "__main__":
     main()
+
+
 
 
 
