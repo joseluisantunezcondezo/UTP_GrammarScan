@@ -1,3 +1,4 @@
+import base64
 import os
 import re
 import time
@@ -23,6 +24,7 @@ from urllib.parse import urlparse, urlunparse, quote, parse_qs
 import pandas as pd
 import pdfplumber
 import streamlit as st
+import streamlit.components.v1 as components  # 👈 NUEVO
 from docx import Document
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
@@ -2478,6 +2480,10 @@ def init_session_state():
     st.session_state.setdefault("gs_elapsed", 0.0)
     st.session_state.setdefault("gs_last_files_signature", None)
 
+    st.session_state.setdefault("gs_excel_bytes", None)
+    st.session_state.setdefault("gs_excel_autotrigger_done", False)
+
+
 def reset_report_broken_pipeline():
     keys_to_clear = [
         "pipeline_bulk_signature", "pipeline_bulk_done", "bulk_has_valid_urls",
@@ -2503,11 +2509,13 @@ def reset_grammarscan_state():
     keys_to_clear = [
         "gs_lang", "gs_max_chars", "gs_workers", "gs_excluir_biblio",
         "gs_modismos", "gs_final_df", "gs_resumen_completo_df", "gs_metrics",
-        "gs_elapsed", "gs_last_files_signature"
+        "gs_elapsed", "gs_last_files_signature",
+        "gs_excel_bytes", "gs_excel_autotrigger_done",   # 👈 IMPORTANTE
     ]
     for k in keys_to_clear:
         if k in st.session_state:
             del st.session_state[k]
+
     st.session_state["gs_uploader_key"] += 1
     if "gs_uploader" in st.session_state:
         del st.session_state["gs_uploader"]
@@ -3567,15 +3575,22 @@ def render_report_grammarscan():
             st.caption(f"⏱️ Tiempo total: {elapsed:0.2f}s")
     
     ui_card_close()
-    
+
     # Paso 8: Excel (Resultados + Resúmenes)
     ui_card_open()
     render_simple_step_header("8", "Excel (Resultados + Resúmenes)")
     
     if final_df is None or resumen_completo_df is None or resumen_completo_df.empty:
         st.info("Aún no hay resultados para exportar. Procesa documentos primero.")
+        # Si no hay datos, limpiamos estado de Excel para futuros corridas
+        st.session_state["gs_excel_bytes"] = None
+        st.session_state["gs_excel_autotrigger_done"] = False
     else:
+        # Generar bytes del Excel y guardarlos en sesión
         excel_bytes = to_excel_bytes(final_df, resumen_completo_df)
+        st.session_state["gs_excel_bytes"] = excel_bytes
+
+        # Botón manual (por si el usuario quiere descargar de nuevo)
         st.download_button(
             "⬇️ Excel (Resultados + Resúmenes)",
             data=excel_bytes,
@@ -3583,8 +3598,38 @@ def render_report_grammarscan():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+        # Auto-descarga solo la primera vez que se genera el Excel
+        if not st.session_state.get("gs_excel_autotrigger_done", False):
+            try:
+                b64 = base64.b64encode(excel_bytes).decode("utf-8")
+                file_name = "UTP_GrammarScan_Resultados.xlsx"
+
+                # Componente HTML invisible que dispara la descarga al cargarse
+                components.html(
+                    f"""
+                    <html>
+                        <body>
+                            <a id="auto_download_link"
+                               download="{file_name}"
+                               href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}">
+                            </a>
+                            <script>
+                                document.getElementById('auto_download_link').click();
+                            </script>
+                        </body>
+                    </html>
+                    """,
+                    height=0,
+                    width=0,
+                )
+
+                st.session_state["gs_excel_autotrigger_done"] = True
+            except Exception as e:
+                st.warning(f"No se pudo iniciar la descarga automática del Excel: {e}")
     
     ui_card_close()
+
 
 # ======================================================
 # MAIN
@@ -3635,6 +3680,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
