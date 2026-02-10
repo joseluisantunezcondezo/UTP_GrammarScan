@@ -2646,7 +2646,6 @@ def process_grammarscan_files(
             f"0/{total_seleccionados} archivos",
         )
 
-
     t0 = time.time()
 
     for i, lf in enumerate(logical_files, start=1):
@@ -2698,8 +2697,6 @@ def process_grammarscan_files(
             })
             st.error(f"Error procesando {lf.display_name}: {e}")
 
-    
-
     resumen_completo_df = pd.DataFrame(resumen_rows)
     n_inc = int(resumen_completo_df.query("Estado == 'Con incidencias'")["Archivo"].nunique()) if not resumen_completo_df.empty else 0
     n_zero = int(resumen_completo_df.query("Estado == 'Sin incidencias o sin texto'")["Archivo"].nunique()) if not resumen_completo_df.empty else 0
@@ -2722,32 +2719,204 @@ def process_grammarscan_files(
 # ======================================================
 # PÁGINAS / MÓDULOS
 # ======================================================
+
 def page_home():
-    # Banner principal del Home
+    # Hero principal
     render_hero(
-        title="Plataforma UTP - GrammarScan",
-        subtitle="Revisión automatizada de ortografía y gramática para documentos académicos y administrativos.",
-        icon="📝",
+        title=APP_TITLE,
+        subtitle=(
+            "Revisión automatizada y validación inteligente de enlaces contenidos "
+            "en documentos académicos y administrativos."
+        ),
+        icon="🔗",
     )
 
-    # Contenido del Home
+    # Card principal de contenido
     ui_card_open()
-    st.markdown("### 🏠 Home")
 
+    # Sección: Home + propósito general
     st.markdown(
         """
-UTP GrammarScan es una herramienta inteligente desarrollada para el análisis automatizado de información contenida en diversos tipos de archivos académicos y administrativos.
+        ### 🏠 Home
 
-Su objetivo es optimizar los procesos de revisión documental y reducir el tiempo de revisión manual, asegurando la calidad lingüística y la consistencia de los textos académicos producidos dentro de la institución.
+        UTP GrammarScan es una herramienta inteligente desarrollada para el análisis automatizado de información
+        contenida en diversos tipos de archivos académicos y administrativos.
+        Su objetivo es optimizar los procesos de revisión documental y reducir el tiempo de revisión manual, 
+        asegurando la calidad lingüística y la consistencia de los textos académicos producidos dentro de la institución.
 
-**Principales funcionalidades:**
+        ### 🎯 Propósito de la Plataforma
 
-- **Carga y visualización de imágenes.** Permite subir imágenes desde el explorador local, visualizarlas directamente en la interfaz y analizarlas.
-- **Análisis de datasets en formato CSV.** Posibilita cargar archivos CSV, examinarlos de manera interactiva y realizar verificaciones de estructura y consistencia textual.
-- **Extracción y análisis de texto desde documentos PDF, DOCX, TXT y PPTX.** Utiliza motores avanzados de lectura de documentos para extraer su contenido textual y aplicar algoritmos de detección de errores ortográficos, gramaticales y de estilo.
+        Automatizar el proceso completo de revisión documental desde la recolección de materiales hasta el análisis 
+        lingüístico avanzado, ofreciendo una solución integral que:
 
-Los resultados se presentarán en un reporte estructurado, indicando el nombre del archivo, el tipo de archivo, Página/Diapositiva, Párrafo con el error, Error y la Corrección o Sugerencia. Todos los resultados del análisis se consolidan en un DataFrame interactivo, que puede exportarse en formatos Excel o CSV.
+        - Unifica múltiples fuentes de documentos (descarga masiva, carga manual, procesamiento automático).
+        - Estandariza formatos (PDF, Word, PPT → Texto estructurado).
+        - Analiza contenido con motores de gramática y ortografía profesional.
+        - Genera reportes detallados y exportables listos para revisión.
+        """,
+        unsafe_allow_html=False,
+    )
+
+    # Sección: Funcionalidades principales
+    st.markdown(
         """
+        ---
+        ### ✨ Funcionalidades Principales
+
+        - **Descarga Masiva Inteligente (Extracción Automática)**. Identifica y descarga automáticamente documentos **PDF, Word y PPT** desde listados de URLs en Excel.
+        - **Transformación Avanzada de Documentos PDF a Word**. Convierte documentos PDF a formato Word manteniendo la estructura y contenido textual.  
+        - **Análisis Lingüístico Avanzado**. Revisión ortográfica y gramatical con LanguageTool. Detección de modismos argentinos con diccionario personalizado. 
+        - **Reporte Status Excel**. Genera reportes en Excel detallados (Archivo, página, error, sugerencia, contexto).  
+        """,
+        unsafe_allow_html=False,
+    )
+
+    # Sección: Flujo de trabajo (NUEVA VERSIÓN)
+    st.markdown("---")
+    st.markdown("### ✨ Flujo de Trabajo")
+
+    # 1) Resumen en tarjetas horizontales CON FLECHAS
+    pasos_resumen = [
+        ("1", "Carga de URLs", "Excel con enlaces"),
+        ("2", "Descarga masiva", "Documentos origen"),
+        ("3", "Transformación", "PDF → Word"),
+        ("4", "Extracción", "Análisis de Documentos"),
+        ("5", "Validación", "Ortográfica y Gramatical"),
+        ("6", "Reporte final", "Excel Status"),
+    ]
+
+    # [card, arrow, card, arrow, ..., card]
+    pesos = []
+    for i in range(len(pasos_resumen)):
+        pesos.append(4)  # columna de tarjeta
+        if i < len(pasos_resumen) - 1:
+            pesos.append(1)  # columna de flecha
+
+    cols = st.columns(pesos)
+
+    idx = 0
+    for i, (numero, titulo, subtitulo) in enumerate(pasos_resumen):
+        # tarjeta
+        with cols[idx]:
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #ffffff;
+                    border-radius: 14px;
+                    padding: 16px 18px;
+                    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+                    text-align: center;
+                    font-size: 0.85rem;
+                ">
+                    <div style="
+                        display:inline-flex;
+                        align-items:center;
+                        justify-content:center;
+                        width:32px;
+                        height:32px;
+                        border-radius:8px;
+                        background:#3b82f6;
+                        color:#ffffff;
+                        font-weight:700;
+                        margin-bottom:6px;
+                    ">
+                        {numero}
+                    </div>
+                    <div style="font-weight: 600;">{titulo}</div>
+                    <div style="color: #6b7280; font-size: 0.75rem;">{subtitulo}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        idx += 1
+
+        # flecha (entre tarjetas, excepto después de la última)
+        if i < len(pasos_resumen) - 1:
+            with cols[idx]:
+                st.markdown(
+                    """
+                    <div style="
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        min-height:120px;
+                    ">
+                        <span style="font-size:1.8rem; color:#9ca3af;">➜</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            idx += 1
+
+    st.markdown("")  # pequeño espacio debajo del timeline
+
+ # 2) Detalle por paso en expanders (6 pasos completos)
+    with st.expander("🔹 Paso 1: Carga de Excel de URLs", expanded=False):
+        st.markdown(
+            """
+            - **Formato flexible**: soporta múltiples estructuras de columnas en Excel.  
+            - **Normalización automática**: corrige y estandariza formatos de URLs.  
+            - **Validación preliminar**: detecta problemas estructurales antes del procesamiento.
+            """
+        )
+
+    with st.expander("🔹 Paso 2: Descarga Masiva", expanded=False):
+        st.markdown(
+            """
+            - **Procesamiento automático**: descarga simultánea de múltiples documentos.  
+            - **Gestión de errores**: registro detallado de fallos con motivos específicos.  
+            - **Organización automática**: archivos descargados listos para procesamiento posterior.
+            """
+        )
+
+    with st.expander("🔹 Paso 3: Transformación de Documentos", expanded=False):
+        st.markdown(
+            """
+            - **Conversión** **PDF → Word**: extracción textual manteniendo referencias.  
+            - **Procesamiento paralelo**: uso eficiente de recursos para documentos grandes.  
+            - **Preservación de metadatos**: mantenimiento de información de origen.
+            """
+        )
+
+    with st.expander("🔹 Paso 4: Análisis de Documentos", expanded=False):
+        st.markdown(
+            """
+            - **Análisis exhaustivo**: procesamiento completo de documentos convertidos (PDF, Word, PPT) para extracción de contenido.  
+            - **Contexto completo**: preparación optimizada del contenido para la validación lingüística.
+            """
+        )
+
+    with st.expander("🔹 Paso 5: Ortografía y Gramática", expanded=False):
+        st.markdown(
+            """
+            - **Verificación en tiempo real**: Análisis con LanguageTool.  
+            - **Clasificación modismos**: detección de modismos argentinos específicos.  
+            """
+        )
+
+    with st.expander("🔹 Paso 6: Reporte Final", expanded=False):
+        st.markdown(
+            """
+            - **Excel estructurado**: exportación de reporte Excel.  
+            - **Descarga Automatizada**: Descarga automática al completar el análisis.
+            """
+        )
+
+
+    # Sección: Seguridad
+    st.markdown(
+        """
+        ---
+        ### 🔒 Seguridad y Privacidad
+
+        - **Procesamiento local**: no se almacenan documentos en servidores externos.  
+        - **Metadatos anónimos**: solo se registra información necesaria para el análisis.  
+        - **Sin persistencia**: los archivos temporales se eliminan después del procesamiento.  
+        - **Control total**: el usuario mantiene control completo sobre sus documentos.
+        """,
+        unsafe_allow_html=False,
     )
 
     ui_card_close()
@@ -3629,7 +3798,6 @@ def render_report_grammarscan():
                 st.warning(f"No se pudo iniciar la descarga automática del Excel: {e}")
     
     ui_card_close()
-
 
 # ======================================================
 # MAIN
