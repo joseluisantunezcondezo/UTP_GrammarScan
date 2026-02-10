@@ -2483,7 +2483,6 @@ def init_session_state():
     st.session_state.setdefault("gs_excel_bytes", None)
     st.session_state.setdefault("gs_excel_autotrigger_done", False)
 
-
 def reset_report_broken_pipeline():
     keys_to_clear = [
         "pipeline_bulk_signature", "pipeline_bulk_done", "bulk_has_valid_urls",
@@ -2903,8 +2902,6 @@ def page_home():
             - **Descarga Automatizada**: Descarga automática al completar el análisis.
             """
         )
-
-
     # Sección: Seguridad
     st.markdown(
         """
@@ -2935,188 +2932,199 @@ def render_report_grammarscan():
     st.markdown('<div class="hero-reset-anchor"></div>', unsafe_allow_html=True)
     if st.button("Reiniciar", key="btn_reset_report_broken"):
         reset_full_pipeline()
-    
-    # ---------- TARJETA: Selección de Excel (Paso 1) ----------
-    ui_card_open()
-    step1_ph = st.empty()
-    
-    bulk_uploader_key = f"pipeline_bulk_excel_uploader_{st.session_state.get('pipeline_reset_token', 0)}"
-    uploaded_excel = st.file_uploader(
-        "Seleccione el archivo Excel que contiene las URLs de los documentos a descargar",
-        type=["xlsx", "xls"],
-        key=bulk_uploader_key,
-    )
-    
-    file_ok = uploaded_excel is not None
-    step1_ph.markdown(
-        render_step_header_html(
-            "1",
+
+    # ------------------------------------------------------------------
+    # VENTANA COLAPSABLE: Descarga masiva de documentos (PDF, Word, PPT)
+    #   - Colapsada por defecto.
+    #   - Al pulsar Reiniciar se incrementa pipeline_reset_token y se
+    #     genera un label interno distinto añadiendo caracteres invisibles
+    #     (\u200B), lo que fuerza a Streamlit a recrear el expander
+    #     completamente colapsado, sin usar key.
+    # ------------------------------------------------------------------
+    exp_base_label = "Descarga masiva de documentos (PDF, Word, PPT)"
+    reset_counter = st.session_state.get("pipeline_reset_token", 0)
+    exp_label_internal = exp_base_label + ("\u200B" * reset_counter)
+
+    with st.expander(exp_label_internal, expanded=False):
+
+        # ---------- TARJETA: Selección de Excel (Paso 1) ----------
+        ui_card_open()
+        step1_ph = st.empty()
+        
+        bulk_uploader_key = f"pipeline_bulk_excel_uploader_{st.session_state.get('pipeline_reset_token', 0)}"
+        uploaded_excel = st.file_uploader(
             "Seleccione el archivo Excel que contiene las URLs de los documentos a descargar",
-            "ok" if file_ok else "warn",
-        ),
-        unsafe_allow_html=True,
-    )
-    
-    bulk_urls_archivos: List[str] = []
-    df_in_bulk: Optional[pd.DataFrame] = None
-    
-    if file_ok:
-        try:
-            df_in_bulk = _read_excel_safe(uploaded_excel)
-        except Exception as e:
-            st.error(str(e))
-        else:
-            st.session_state["bulk_excel_df"] = df_in_bulk
-            if "url" not in df_in_bulk.columns:
-                st.error("El Excel no contiene la columna requerida: **url**.")
-                st.caption(f"Columnas detectadas: {', '.join(map(str, df_in_bulk.columns.tolist()))}")
-            else:
-                df_urls = df_in_bulk["url"].dropna()
-                bulk_urls_archivos = [
-                    str(u).strip()
-                    for u in df_urls
-                    if str(u).strip().lower().endswith(DESC_EXT_PERMITIDAS)
-                ]
-                total_urls = len(df_urls)
-                total_permitidas = len(bulk_urls_archivos)
-                
-                if total_permitidas == 0:
-                    st.warning("No se encontraron URLs que terminen en .ppt, .pptx, .pdf, .doc o .docx.")
-                else:
-                    st.session_state["bulk_has_valid_urls"] = True
-                    st.session_state["bulk_urls_archivos"] = bulk_urls_archivos
-                    
-                    try:
-                        excel_bytes = uploaded_excel.getbuffer()
-                        bulk_signature = (uploaded_excel.name, len(excel_bytes))
-                    except Exception:
-                        bulk_signature = (uploaded_excel.name, 0)
-                    
-                    prev_bulk_sig = st.session_state.get("pipeline_bulk_signature")
-                    if prev_bulk_sig != bulk_signature:
-                        st.session_state["pipeline_bulk_signature"] = bulk_signature
-                        st.session_state["pipeline_bulk_done"] = False
-    else:
-        st.caption("Carga un archivo Excel para continuar con la descarga masiva.")
-    
-    ui_card_close()
-    
-    # ---------- TARJETA: Procesar Descarga Masiva (Paso 2) ----------
-    ui_card_open()
-    render_simple_step_header("2", "Procesar Descarga Masiva")
-    
-    if not _requests_available_or_warn():
-        ui_card_close()
-        return
-    
-    progress_task_bulk = st.empty()
-
-    
-    urls_archivos_state = st.session_state.get("bulk_urls_archivos") or []
-    auto_trigger_bulk = bool(urls_archivos_state) and not st.session_state.get("pipeline_bulk_done", False)
-    
-    if urls_archivos_state and auto_trigger_bulk:
-        try:
-            render_task_progress(
-                progress_task_bulk,
-                "Descargando archivos",
-                0.0,
-                "Preparando descarga masiva...",
-            )
-            with st.spinner("Descargando archivos..."):
-                resultados, fallidos, download_dir, csv_fallidos_path = _run_descarga_masiva_streamlit(
-                    urls_archivos_state,
-                    progress_placeholder=progress_task_bulk,
-                )
-
-            st.session_state["descarga_resultados"] = resultados
-            st.session_state["descarga_fallidos"] = fallidos
-            st.session_state["descarga_download_dir"] = download_dir
-            st.session_state["descarga_fallidos_csv"] = csv_fallidos_path
-            st.session_state["pipeline_bulk_done"] = True
-
-        except Exception as e:
-            progress_task_bulk.empty()
-            st.error(f"Ocurrió un error durante la descarga masiva: {e}")
-
-    
-    resultados_ready = st.session_state.get("descarga_resultados") or []
-    fallidos_ready = st.session_state.get("descarga_fallidos") or []
-    
-    if not (resultados_ready or fallidos_ready):
-        if not urls_archivos_state:
-            st.caption("Primero carga un Excel válido con URLs para poder procesar la descarga.")
-    
-    if st.session_state.get("pipeline_bulk_done", False):
-        render_success_chip("Descarga masiva completada")
-    
-    ui_card_close()
-    
-    # ---------- TARJETA: Descargar ZIP (Paso 3) ----------
-    ui_card_open()
-    render_simple_step_header("3", "Descargar todos los archivos (PDF, Word, PPT) (ZIP)")
-    
-    resultados_ready = st.session_state.get("descarga_resultados") or []
-    download_dir = st.session_state.get("descarga_download_dir")
-    csv_fallidos_path = st.session_state.get("descarga_fallidos_csv")
-    
-    file_paths: List[str] = []
-    for r in resultados_ready:
-        p = r.get("ruta_archivo")
-        if p and os.path.exists(p):
-            file_paths.append(str(p))
-    
-    if not (resultados_ready):
-        st.warning("Primero ejecuta el paso 2 para generar las descargas.")
-    elif not file_paths:
-        
-                st.info(
-            "No hay archivos descargados correctamente para comprimir en ZIP "
-            "(es posible que todas las descargas hayan fallado)."
+            type=["xlsx", "xls"],
+            key=bulk_uploader_key,
         )
-    else:
-        groups = _group_files_by_size(file_paths, max_mb=MAX_ZIP_BLOCK_MB)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        if len(groups) == 1:
-            zip_bytes = _zip_paths_to_bytes(groups[0])
-            zip_name = f"Descarga_Masiva_Documentos_{ts}.zip"
-            st.download_button(
-                "⬇️ Descargar todos los archivos (ZIP)",
-                data=zip_bytes,
-                file_name=zip_name,
-                mime="application/zip",
+        file_ok = uploaded_excel is not None
+        step1_ph.markdown(
+            render_step_header_html(
+                "1",
+                "Seleccione el archivo Excel que contiene las URLs de los documentos a descargar",
+                "ok" if file_ok else "warn",
+            ),
+            unsafe_allow_html=True,
+        )
+        
+        bulk_urls_archivos: List[str] = []
+        df_in_bulk: Optional[pd.DataFrame] = None
+        
+        if file_ok:
+            try:
+                df_in_bulk = _read_excel_safe(uploaded_excel)
+            except Exception as e:
+                st.error(str(e))
+            else:
+                st.session_state["bulk_excel_df"] = df_in_bulk
+                if "url" not in df_in_bulk.columns:
+                    st.error("El Excel no contiene la columna requerida: **url**.")
+                    st.caption(f"Columnas detectadas: {', '.join(map(str, df_in_bulk.columns.tolist()))}")
+                else:
+                    df_urls = df_in_bulk["url"].dropna()
+                    bulk_urls_archivos = [
+                        str(u).strip()
+                        for u in df_urls
+                        if str(u).strip().lower().endswith(DESC_EXT_PERMITIDAS)
+                    ]
+                    total_urls = len(df_urls)
+                    total_permitidas = len(bulk_urls_archivos)
+                    
+                    if total_permitidas == 0:
+                        st.warning("No se encontraron URLs que terminen en .ppt, .pptx, .pdf, .doc o .docx.")
+                    else:
+                        st.session_state["bulk_has_valid_urls"] = True
+                        st.session_state["bulk_urls_archivos"] = bulk_urls_archivos
+                        
+                        try:
+                            excel_bytes = uploaded_excel.getbuffer()
+                            bulk_signature = (uploaded_excel.name, len(excel_bytes))
+                        except Exception:
+                            bulk_signature = (uploaded_excel.name, 0)
+                        
+                        prev_bulk_sig = st.session_state.get("pipeline_bulk_signature")
+                        if prev_bulk_sig != bulk_signature:
+                            st.session_state["pipeline_bulk_signature"] = bulk_signature
+                            st.session_state["pipeline_bulk_done"] = False
+        else:
+            st.caption("Carga un archivo Excel para continuar con la descarga masiva.")
+        
+        ui_card_close()
+        
+        # ---------- TARJETA: Procesar Descarga Masiva (Paso 2) ----------
+        ui_card_open()
+        render_simple_step_header("2", "Procesar Descarga Masiva")
+        
+        if not _requests_available_or_warn():
+            ui_card_close()
+            # salimos sólo del bloque del expander
+        else:
+            progress_task_bulk = st.empty()
+            
+            urls_archivos_state = st.session_state.get("bulk_urls_archivos") or []
+            auto_trigger_bulk = bool(urls_archivos_state) and not st.session_state.get("pipeline_bulk_done", False)
+            
+            if urls_archivos_state and auto_trigger_bulk:
+                try:
+                    render_task_progress(
+                        progress_task_bulk,
+                        "Descargando archivos",
+                        0.0,
+                        "Preparando descarga masiva...",
+                    )
+                    with st.spinner("Descargando archivos..."):
+                        resultados, fallidos, download_dir, csv_fallidos_path = _run_descarga_masiva_streamlit(
+                            urls_archivos_state,
+                            progress_placeholder=progress_task_bulk,
+                        )
+    
+                    st.session_state["descarga_resultados"] = resultados
+                    st.session_state["descarga_fallidos"] = fallidos
+                    st.session_state["descarga_download_dir"] = download_dir
+                    st.session_state["descarga_fallidos_csv"] = csv_fallidos_path
+                    st.session_state["pipeline_bulk_done"] = True
+    
+                except Exception as e:
+                    progress_task_bulk.empty()
+                    st.error(f"Ocurrió un error durante la descarga masiva: {e}")
+            
+            resultados_ready = st.session_state.get("descarga_resultados") or []
+            fallidos_ready = st.session_state.get("descarga_fallidos") or []
+            
+            if not (resultados_ready or fallidos_ready):
+                if not urls_archivos_state:
+                    st.caption("Primero carga un Excel válido con URLs para poder procesar la descarga.")
+            
+            if st.session_state.get("pipeline_bulk_done", False):
+                render_success_chip("Descarga masiva completada")
+            
+            ui_card_close()
+        
+        # ---------- TARJETA: Descargar ZIP (Paso 3) ----------
+        ui_card_open()
+        render_simple_step_header("3", "Descargar todos los archivos (PDF, Word, PPT) (ZIP)")
+        
+        resultados_ready = st.session_state.get("descarga_resultados") or []
+        download_dir = st.session_state.get("descarga_download_dir")
+        csv_fallidos_path = st.session_state.get("descarga_fallidos_csv")
+        
+        file_paths: List[str] = []
+        for r in resultados_ready:
+            p = r.get("ruta_archivo")
+            if p and os.path.exists(p):
+                file_paths.append(str(p))
+        
+        if not resultados_ready:
+            st.warning("Primero ejecuta el paso 2 para generar las descargas.")
+        elif not file_paths:
+            st.info(
+                "No hay archivos descargados correctamente para comprimir en ZIP "
+                "(es posible que todas las descargas hayan fallado)."
             )
         else:
-            st.info(
-                f"Los archivos descargados se han dividido en **{len(groups)} ZIPs** "
-                f"para que cada uno tenga como máximo ~{MAX_ZIP_BLOCK_MB} MB."
-            )
-            for idx, group in enumerate(groups, start=1):
-                zip_bytes = _zip_paths_to_bytes(group)
-                zip_name = f"Descarga_Masiva_Documentos_{ts}_parte{idx}.zip"
+            groups = _group_files_by_size(file_paths, max_mb=MAX_ZIP_BLOCK_MB)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            if len(groups) == 1:
+                zip_bytes = _zip_paths_to_bytes(groups[0])
+                zip_name = f"Descarga_Masiva_Documentos_{ts}.zip"
                 st.download_button(
-                    f"⬇️ Descargar ZIP parte {idx}",
+                    "⬇️ Descargar todos los archivos (ZIP)",
                     data=zip_bytes,
                     file_name=zip_name,
                     mime="application/zip",
-                    key=f"btn_zip_part_{idx}",
                 )
-    
-    if csv_fallidos_path and os.path.exists(csv_fallidos_path):
-        try:
-            with open(csv_fallidos_path, "rb") as fh:
-                csv_bytes = fh.read()
-            st.download_button(
-                "⬇️ Descargar CSV de descargas fallidas",
-                data=csv_bytes,
-                file_name="descargas_fallidas.csv",
-                mime="text/csv",
-            )
-        except Exception as e:
-            st.warning(f"No se pudo leer el CSV de descargas fallidas: {e}")
-    
-    ui_card_close()
+            else:
+                st.info(
+                    f"Los archivos descargados se han dividido en **{len(groups)} ZIPs** "
+                    f"para que cada uno tenga como máximo ~{MAX_ZIP_BLOCK_MB} MB."
+                )
+                for idx, group in enumerate(groups, start=1):
+                    zip_bytes = _zip_paths_to_bytes(group)
+                    zip_name = f"Descarga_Masiva_Documentos_{ts}_parte{idx}.zip"
+                    st.download_button(
+                        f"⬇️ Descargar ZIP parte {idx}",
+                        data=zip_bytes,
+                        file_name=zip_name,
+                        mime="application/zip",
+                        key=f"btn_zip_part_{idx}",
+                    )
+        
+        if csv_fallidos_path and os.path.exists(csv_fallidos_path):
+            try:
+                with open(csv_fallidos_path, "rb") as fh:
+                    csv_bytes = fh.read()
+                st.download_button(
+                    "⬇️ Descargar CSV de descargas fallidas",
+                    data=csv_bytes,
+                    file_name="descargas_fallidas.csv",
+                    mime="text/csv",
+                )
+            except Exception as e:
+                st.warning(f"No se pudo leer el CSV de descargas fallidas: {e}")
+        
+        ui_card_close()
     
     # ======================================================
     # 2. PDF, WORD and PPT to Word Transformation (ZIP)
@@ -3126,6 +3134,8 @@ def render_report_grammarscan():
         "Convierte múltiples PDFs, Word y PPT a Word (texto) usando archivos en disco, sin mantener bytes en memoria.",
         "🧲",
     )
+    # ... (resto de la función sigue igual)
+
     
     if fitz is None or DocxDocument is None:
         ui_card_open()
@@ -3848,6 +3858,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
