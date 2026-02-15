@@ -2587,15 +2587,13 @@ def build_files_signature(uploaded_files) -> str:
     parts.sort()
     return "|".join(parts)
 
-def expand_uploaded_files(
-    ups,
-    max_logical_files: int = 400,
-) -> Tuple[List[LogicalFileSource], bool]:
+def expand_uploaded_files(ups) -> List[LogicalFileSource]:
     logical_files: List[LogicalFileSource] = []
-    truncated = False
+
     for up in ups:
         name = up.name
         ext = os.path.splitext(name)[1].lower()
+
         if ext == ".zip":
             try:
                 zip_bytes = up.getvalue()
@@ -2606,12 +2604,15 @@ def expand_uploaded_files(
                         inner_ext = os.path.splitext(info.filename)[1].lower()
                         if inner_ext not in ALLOWED_DOC_EXTS:
                             continue
+
                         display_name = f"{Path(name).stem}/{Path(info.filename).name}"
+
                         def _make_reader(zbytes: bytes, inner_name: str) -> Callable[[], bytes]:
                             def _reader() -> bytes:
                                 with zipfile.ZipFile(BytesIO(zbytes)) as _zf:
                                     return _zf.read(inner_name)
                             return _reader
+
                         logical_files.append(
                             LogicalFileSource(
                                 display_name=display_name,
@@ -2619,14 +2620,10 @@ def expand_uploaded_files(
                                 read_bytes=_make_reader(zip_bytes, info.filename),
                             )
                         )
-                        if len(logical_files) >= max_logical_files:
-                            truncated = True
-                            break
-                if truncated:
-                    break
             except Exception as e:
                 st.error(f"Error leyendo ZIP '{name}': {e}")
                 continue
+
         elif ext in ALLOWED_DOC_EXTS:
             logical_files.append(
                 LogicalFileSource(
@@ -2635,12 +2632,11 @@ def expand_uploaded_files(
                     read_bytes=up.getvalue,
                 )
             )
-            if len(logical_files) >= max_logical_files:
-                truncated = True
-                break
         else:
             st.warning(f"Archivo omitido por extensión no soportada: {name}")
-    return logical_files, truncated
+
+    return logical_files
+
 
 def process_grammarscan_files(
     ups,
@@ -2667,11 +2663,8 @@ def process_grammarscan_files(
             st.error(f"No se pudieron cargar los modismos desde '{modismos_path}': {e}")
             modismos_patterns = []
 
-    logical_files, truncated = expand_uploaded_files(ups, max_logical_files=400)
+    logical_files = expand_uploaded_files(ups)
     total_seleccionados = len(logical_files)
-
-    if truncated:
-        st.warning(f"Se detectó un lote muy grande de documentos. Solo se procesarán los primeros {total_seleccionados} archivos lógicos.")
 
     if total_seleccionados == 0:
         return pd.DataFrame([]), pd.DataFrame([]), {"total": 0, "n_inc": 0, "n_zero": 0, "n_err": 0}, 0.0
@@ -3923,6 +3916,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
