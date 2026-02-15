@@ -89,8 +89,43 @@ DEFAULT_CONCURRENCY_PER_HOST = 6
 DEFAULT_RETRIES = 3
 DEFAULT_MAX_BYTES = 200_000
 DEFAULT_RANGE_BYTES = 131_072
-STATUS_BLOCK_SIZE = 200
-MAX_ZIP_BLOCK_MB = 200
+
+STATUS_BLOCK_SIZE = 200  # número máximo de links por bloque al validar
+MAX_ZIP_BLOCK_MB = 200   # tamaño máximo aproximado por bloque de ZIP (MB)
+
+# --------- Límite de seguridad Streamlit Cloud (solo afecta a la descarga masiva desde Excel) ----------
+MAX_BULK_URLS_CLOUD = 700
+
+
+def is_streamlit_cloud() -> bool:
+    """Detecta si la app está ejecutándose en Streamlit Cloud.
+
+    Se puede forzar de dos maneras:
+    - Configurando st.secrets["is_streamlit_cloud"] = true/false.
+    - Definiendo la variable de entorno IS_STREAMLIT_CLOUD=true/false.
+    En local, por defecto devolverá False.
+    """
+    # 1) Intentar leer desde st.secrets (si existe)
+    try:
+        if "is_streamlit_cloud" in st.secrets:
+            val = st.secrets["is_streamlit_cloud"]
+        else:
+            val = None
+    except Exception:
+        val = None
+
+    # 2) Si no está en secrets, mirar variable de entorno
+    if val is None:
+        val = os.environ.get("IS_STREAMLIT_CLOUD", "")
+
+    if isinstance(val, bool):
+        return val
+
+    return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+IS_STREAMLIT_CLOUD = is_streamlit_cloud()
+
 
 # Descarga Masiva
 MAX_INTENTOS_DESCARGA = 7
@@ -2105,10 +2140,17 @@ def _run_descarga_masiva_streamlit(
 # UI HELPERS
 # ======================================================
 def apply_global_styles():
-    st.markdown("""
+    st.markdown(
+        """
         <style>
+        /* Reducir tamaño base de fuente para que todo se vea más compacto */
+        html {
+            font-size: 11px;  /* en lugar de 16px */
+        }
+
         [data-testid="stAppViewContainer"] { background: #f3f4f6; }
         [data-testid="stSidebar"] { background: #f9fafb; }
+
         .utp-hero {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border-radius: 18px;
@@ -2120,6 +2162,7 @@ def apply_global_styles():
             align-items: center;
             gap: 1.0rem;
         }
+
         .utp-hero-icon {
             width: 3.1rem;
             height: 3.1rem;
@@ -2289,7 +2332,7 @@ def apply_global_styles():
         .progress-bar-ui-task-track {
             position: relative;
             width: 100%;
-            height: 26px;                      /* ⬅️ antes 18px: barra mucho más gruesa */
+            height: 20px;                      /* ⬅️ antes 18px: barra mucho más gruesa */
             border-radius: 999px;
             background: #e0f2ff;               /* azul muy claro como el fondo de la captura */
             overflow: hidden;
@@ -2923,8 +2966,8 @@ def render_report_grammarscan():
     # 1. Bulk Document (PDF, WORD and PPT) Download
     # ======================================================
     render_hero(
-        "Bulk Document (PDF, WORD and PPT) Download",
-        "Descarga múltiple de documentos PDF, Word y PPT desde un archivo Excel de URLs.",
+        "Descarga Masiva Automática de Documentos (PDF's - Word y PPT) desde un Reporte Excel",
+        "Sube tu Excel con URLs y descarga automáticamente todos los documentos y el reporte en Excel.",
         "⬇️",
     )
     
@@ -2982,7 +3025,10 @@ def render_report_grammarscan():
                     st.error("El Excel no contiene la columna requerida: **url**.")
                     st.caption(f"Columnas detectadas: {', '.join(map(str, df_in_bulk.columns.tolist()))}")
                 else:
+                    # Ya está normalizada, solo descartamos NaN
                     df_urls = df_in_bulk["url"].dropna()
+
+                    # Aseguramos que lo que se manda a descarga también vaya limpio
                     bulk_urls_archivos = [
                         str(u).strip()
                         for u in df_urls
@@ -2990,12 +3036,31 @@ def render_report_grammarscan():
                     ]
                     total_urls = len(df_urls)
                     total_permitidas = len(bulk_urls_archivos)
-                    
-                    if total_permitidas == 0:
-                        st.warning("No se encontraron URLs que terminen en .ppt, .pptx, .pdf, .doc o .docx.")
+
+                    # 🔹 Límite duro de seguridad cuando se ejecuta en Streamlit Cloud
+                    if IS_STREAMLIT_CLOUD and total_permitidas > MAX_BULK_URLS_CLOUD:
+                        st.error(
+                            f"El Excel contiene {total_permitidas} URLs descargables, "
+                            f"lo cual supera el límite de {MAX_BULK_URLS_CLOUD} URLs "
+                            "por ejecución en Streamlit Cloud. "
+                            "Para más de 700 URLs, divide el Excel o ejecuta la herramienta en local."
+                        )
+                        st.info(
+                            "📌 Documento demasiado grande para **Streamlit Cloud**; "
+                            "divide el Excel en varios archivos más pequeños "
+                            "o ejecuta la herramienta en tu equipo local."
+                        )
+                        # No habilitar la descarga masiva automática
+                        st.session_state["bulk_has_valid_urls"] = False
+                        st.session_state["bulk_urls_archivos"] = None
                     else:
-                        st.session_state["bulk_has_valid_urls"] = True
-                        st.session_state["bulk_urls_archivos"] = bulk_urls_archivos
+                        if total_permitidas == 0:
+                            st.warning(
+                                "No se encontraron URLs que terminen en .ppt, .pptx, .pdf, .doc o .docx."
+                            )
+                        else:
+                            st.session_state["bulk_has_valid_urls"] = True
+                            st.session_state["bulk_urls_archivos"] = bulk_urls_archivos
                         
                         try:
                             excel_bytes = uploaded_excel.getbuffer()
@@ -3130,8 +3195,8 @@ def render_report_grammarscan():
     # 2. PDF, WORD and PPT to Word Transformation (ZIP)
     # ======================================================
     render_hero(
-        "PDF, WORD and PPT to Word Transformation (ZIP)",
-        "Convierte múltiples PDFs, Word y PPT a Word (texto) usando archivos en disco, sin mantener bytes en memoria.",
+        "Carga Directa de Documentos (PDF's - Word y PPT) y ZIP",
+        "Arrastra tus PDFs, Word, PPT o ZIP y el sistema los procesa automáticamente.",
         "🧲",
     )
     # ... (resto de la función sigue igual)
@@ -3839,9 +3904,9 @@ def main():
         with st.expander("Recomendaciones"):
             st.markdown(
                 """
-                - Se recomienda en el proceso "1" descargar de forma masiva entre **400 - 500** registros como máximo.  
-                - Para más de **500** registros, lo recomendable es:  
-                    Ejecutar el app en local o dividir el Excel de Url en varios archivos (por ejemplo bloques de 500 registros) y procesarlos por partes.  
+                - Se recomienda en el proceso "1" descargar de forma masiva entre **500 - 700** registros como máximo.  
+                - Para más de **700** registros, lo recomendable es:  
+                    Ejecutar el app en local o dividir el Excel de Url en varios archivos (por ejemplo bloques de 500 o 700 registros) y procesarlos por partes.  
                 - Esto para evitar que el contenedor de **Streamlit Cloud** se quede sin memoria (~1 GB de RAM) 
                 """
             )
