@@ -1,3 +1,4 @@
+from __future__ import annotations
 import base64
 import os
 import re
@@ -16,15 +17,12 @@ import tempfile
 import queue
 import logging
 import sys
-import asyncio
-import random
 import unicodedata
-from urllib.parse import urlparse, urlunparse, quote, parse_qs
 
 import pandas as pd
 import pdfplumber
 import streamlit as st
-import streamlit.components.v1 as components  # 👈 NUEVO
+import streamlit.components.v1 as components
 from docx import Document
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
@@ -35,7 +33,7 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from dataclasses import dataclass
 
 # =========================
-# Dependencias PDF / Word / PPT para Broken Link Checker
+# Dependencias PDF / Word / PPT para procesamiento de documentos
 # =========================
 try:
     import fitz  # PyMuPDF
@@ -56,11 +54,6 @@ try:
     import requests
 except ImportError:
     requests = None
-
-try:
-    import httpx
-except ImportError:
-    httpx = None
 
 # ======================================================
 # LOGGING
@@ -83,14 +76,6 @@ MODULES = [
     "Report GrammarScan",
 ]
 
-DEFAULT_TIMEOUT_S = 15.0
-DEFAULT_CONCURRENCY_GLOBAL = 30
-DEFAULT_CONCURRENCY_PER_HOST = 6
-DEFAULT_RETRIES = 3
-DEFAULT_MAX_BYTES = 200_000
-DEFAULT_RANGE_BYTES = 131_072
-
-STATUS_BLOCK_SIZE = 200  # número máximo de links por bloque al validar
 MAX_ZIP_BLOCK_MB = 200   # tamaño máximo aproximado por bloque de ZIP (MB)
 
 # --------- Límite de seguridad Streamlit Cloud (solo afecta a la descarga masiva desde Excel) ----------
@@ -136,45 +121,6 @@ REQUEST_HEADERS = {
     "Accept-Encoding": "identity",
 }
 DESC_EXT_PERMITIDAS = (".ppt", ".pptx", ".pdf", ".doc", ".docx")
-
-# Patrones de soft-404 (simplificados)
-SOFT_404_PATTERNS = [
-    r"\b404\b",
-    r"page\s+not\s+found",
-    r"file\s+not\s+found",
-    r"document\s+not\s+found",
-    r"p[aá]gina\s+no\s+encontrada",
-    r"la\s+p[aá]gina\s+no\s+existe",
-    r"no\s+se\s+encontr[oó]",
-]
-SOFT_404_RE = re.compile("|".join(SOFT_404_PATTERNS), re.IGNORECASE)
-
-# Extensiones binarias
-BINARY_EXTS = {
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".rar", ".7z",
-    ".ppt", ".pptx", ".mp4", ".mp3", ".avi", ".mov", ".wmv", ".mkv",
-    ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp", ".svg",
-}
-
-# Content-Type esperados
-EXPECTED_CONTENT_TYPES = {
-    ".pdf": ["application/pdf"],
-    ".doc": ["application/msword"],
-    ".docx": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
-    ".xls": ["application/vnd.ms-excel"],
-    ".xlsx": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
-    ".zip": ["application/zip", "application/x-zip-compressed"],
-    ".rar": ["application/x-rar-compressed"],
-    ".ppt": ["application/vnd.ms-powerpoint"],
-    ".pptx": ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
-}
-
-# User-Agents realistas
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-]
 
 # ======================================================
 # LÓGICA GRAMMARSCAN (original)
@@ -279,136 +225,571 @@ def load_modismos_from_excel(path: str) -> List[ModismoPattern]:
 def get_modismos_patterns(modismos_path: str) -> List[ModismoPattern]:
     return load_modismos_from_excel(modismos_path)
 
+# ======================================================
+# DETECCIÓN ULTRA ROBUSTA DE BIBLIOGRAFÍAS / REFERENCIAS
+# ======================================================
+
 HEAD_RE = re.compile(
-    r"^\s*(fuentes?\s+bibliogr[aá]ficas?|bibliograf[ií]a|bibliography|"
-    r"referencias(\s+bibliogr[aá]ficas?)?|referencias\s+y\s+bibliograf[ií]a|"
-    r"works\s+cited|obras\s+citadas|webgraf[ií]a|fuentes\s+de\s+consulta|"
-    r"bibliograf[ií]a\s+consultada|citas\s+bibliogr[aá]ficas?)\s*:?\s*$",
-    re.IGNORECASE
+    r"^\s*("
+    r"referencias?(\s+(bibliogr[aá]ficas?|consultadas?|citadas?))?|"
+    r"bibliograf[ií]a(\s+(consultada|citada|utilizada))?|"
+    r"bibliography|references?(\s+(cited|consulted))?|"
+    r"works?\s+cited|obras?\s+citadas?|"
+    r"literatura\s+citada|fuentes?\s+(bibliogr[aá]ficas?|consultadas?|de\s+consulta)|"
+    r"webgraf[ií]a|webliograf[ií]a|netgraf[ií]a|"
+    r"citas?\s+bibliogr[aá]ficas?|"
+    r"literature\s+cited|cited\s+literature|"
+    r"sources?(\s+consulted)?|consulted\s+sources?|"
+    r"refer[eê]ncias(\s+bibliogr[aá]ficas?)?|"
+    r"liste?\s+des?\s+r[ée]f[ée]rences|"
+    r"literaturverzeichnis|quellenverzeichnis"
+    r")\s*:?\s*$",
+    re.IGNORECASE | re.UNICODE,
 )
 
-URL_RE = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
+# --- URL base: dominios + esquemas conocidos ---
+URL_BASE_RE = re.compile(
+    r"("
+    r"https?://[^\s]+"
+    r"|www\.[^\s]+"
+    r"|[A-Za-z0-9\-_.]+\.([A-Za-z]{2,})(/[^\s]*)?"
+    r")",
+    re.IGNORECASE,
+)
+
+# Partes válidas de un path de URL (para unir saltos de línea)
+URL_PATH_CHUNK_RE = re.compile(r"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+")
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Une spans solapados o adyacentes (p.ej. cuando unimos tramos de URL)."""
+    if not spans:
+        return []
+    spans_sorted = sorted(spans, key=lambda s: s[0])
+    merged: list[tuple[int, int]] = []
+    cur_start, cur_end = spans_sorted[0]
+    for start, end in spans_sorted[1:]:
+        if start <= cur_end:  # solapa
+            if end > cur_end:
+                cur_end = end
+        else:
+            merged.append((cur_start, cur_end))
+            cur_start, cur_end = start, end
+    merged.append((cur_start, cur_end))
+    return merged
+
+def find_url_spans_in_text(text: str) -> list[tuple[int, int]]:
+    """
+    Devuelve spans (start, end) de URLs en el texto, uniendo casos como:
+    https://reqtest.com/.../how-to-useinterviews-
+    to-gather-requirements/
+
+    Mantiene indices sobre el texto ORIGINAL.
+    """
+    spans: list[tuple[int, int]] = []
+    if not text:
+        return spans
+
+    n = len(text)
+
+    # 1) Encontrar matches iniciales (URLs base)
+    for m in URL_BASE_RE.finditer(text):
+        start, end = m.span()
+        url_end = end
+
+        # 2) Extender URL cuando hay:
+        #    - salto de línea con '-' o '/'
+        #    - seguido de fragmento válido de path
+        while (
+            url_end < n
+            and text[url_end] == "\n"
+            and url_end - 1 >= 0
+            and text[url_end - 1] in "-/"
+        ):
+            pos = url_end + 1
+            # Saltar espacios o tabs después del salto de línea
+            while pos < n and text[pos] in (" ", "\t"):
+                pos += 1
+            cont_start = pos
+            # Capturar siguiente token hasta el siguiente espacio/salto de línea
+            while pos < n and not text[pos].isspace():
+                pos += 1
+            cont = text[cont_start:pos]
+            if not cont:
+                break
+            # Verificamos que sea un fragmento válido de path de URL
+            if not URL_PATH_CHUNK_RE.fullmatch(cont):
+                break
+            # Al menos debe tener algo tipo '/' o '.' para ser razonable
+            if not any(ch in cont for ch in ("/", ".")):
+                break
+
+            url_end = pos  # extendemos el final del span
+
+        spans.append((start, url_end))
+
+    return _merge_spans(spans)
+
+def mask_urls_preserve_length(
+    text: str,
+    mask_char: str = " ",
+) -> tuple[str, list[tuple[int, int]]]:
+    """
+    Reemplaza TODOS los caracteres de los spans de URL por `mask_char`,
+    pero conserva saltos de línea. Devuelve:
+      - texto_enmascarado
+      - lista de spans (start, end) de URLs en el texto original
+    """
+    spans = find_url_spans_in_text(text)
+    if not spans:
+        return text, []
+
+    chars = list(text)
+    for start, end in spans:
+        for i in range(start, end):
+            # Dejamos \n y \r tal cual para no romper estructura de páginas
+            if chars[i] not in ("\n", "\r"):
+                chars[i] = mask_char
+
+    return "".join(chars), spans
+
+
+DOI_URL_HINT_RE = re.compile(
+    r"("
+    r"doi:\s*10\.\d{4,9}/[^\s\)]+|"
+    r"doi\.org/10\.\d{4,9}/[^\s\)]+|"
+    r"urn:[^\s\)]+|"
+    r"hdl\.handle\.net/[^\s\)]+|"
+    r"pmid:\s*\d+|"
+    r"arxiv:\s*[\d\.]+|"
+    r"issn[\s:-]*\d{4}[\s-]?\d{3}[\dxX]|"
+    r"isbn[\s:-]*(?:\d{9}[\dxX]|\d{13})"
+    r")",
+    re.IGNORECASE,
+)
+
 YEAR_RE = re.compile(r"\b(19|20)\d{2}[a-z]?\b")
-DOI_URL_HINT_RE = re.compile(r"(doi:\s*10\.\d{4,9}/\S+|urn:\S+|hdl:\S+|https?://\S+)", re.IGNORECASE)
+
 JOURNAL_HINT_RE = re.compile(
-    r"\b(vol\.?|no\.?|nº|n\.\s?o\.?|pp\.?|ed\.|edición|issn|isbn|issue|pages)\b",
-    re.IGNORECASE
+    r"\b("
+    r"vol(?:ume|umen)?\.?|"
+    r"no\.?|n[úu]m(?:ero)?\.?|nº|"
+    r"pp?\.?|p[aá]g(?:ina)?s?\.?|"
+    r"ed(?:ición|ition)?\.?|"
+    r"issue|"
+    r"issn|isbn|"
+    r"journal|revista|"
+    r"proceedings|actas|"
+    r"conference|congreso|"
+    r"trans(?:action)?s?\.?"
+    r")\b",
+    re.IGNORECASE,
 )
+
 PUBLISHER_HINT_RE = re.compile(
-    r"\b(pearson|mcgraw[- ]?hill|elsevier|springer|wiley|cengage|prentice\s*hall|sage|oxford|cambridge|harvard\s*press|"
-    r"editorial(?:es)?|ediciones?|universidad(?:\s+de)?\s+\w+)\b",
-    re.IGNORECASE
+    r"\b("
+    r"press|editorial(?:es)?|ediciones?|"
+    r"universidad(?:\s+(?:de|del|de\s+la))?\s+\w+|"
+    r"university\s+(?:of\s+)?\w+|"
+    r"pearson|mcgraw[- ]?hill|elsevier|springer|wiley|"
+    r"cengage|prentice\s*hall|sage|oxford|cambridge|"
+    r"harvard\s*(?:university\s*)?press|"
+    r"mit\s*press|routledge|taylor\s*&?\s*francis|"
+    r"blackwell|pergamon|academic\s*press|"
+    r"john\s*wiley|norton|macmillan|"
+    r"addison[- ]?wesley|thomson|"
+    r"publi(?:shed|cado|cación)|"
+    r"impreso\s+en|printed\s+in"
+    r")\b",
+    re.IGNORECASE,
 )
-ETAL_RE = re.compile(r"\bet\s+al\.?\b", re.IGNORECASE)
+
+ETAL_RE = re.compile(
+    r"\b("
+    r"et\s+al\.?|"
+    r"et\s+alii|"
+    r"y\s+(?:col(?:aboradores)?|cols?|otros)\.?|"
+    r"and\s+(?:others|colleagues?)\.?|"
+    r"e\s+(?:outros|cols?)\.?"
+    r")\b",
+    re.IGNORECASE,
+)
+
 BULLET_PREFIX_RE = re.compile(
-    r"^\s*(?:[\u2022\u2023\u25E6\u2043\u2219\u25CF\u25AA\u25AB\u25A0\u25A1]|[-–—·•▪●◦‣])\s*"
+    r"^\s*(?:"
+    r"[\u2022\u2023\u25E6\u2043\u2219\u25CF\u25AA\u25AB\u25A0\u25A1]|"
+    r"[-–—·•▪●◦‣]|"
+    r"\[\d+\]|"
+    r"\d+[\.\)]\s+"
+    r")\s*"
 )
 
 def _strip_bullet(line: str) -> str:
+    """
+    Elimina viñetas y numeraciones de inicio de línea.
+    """
     return BULLET_PREFIX_RE.sub("", line).strip()
 
+# -------------------------------
+# Patrones por estilo de cita
+# -------------------------------
+
+APA_AUTHOR_YEAR_RE = re.compile(
+    r"("
+    r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s+(?:[A-Z]\.?\s*){1,4}"
+    r"(?:\s*(?:&|y|and|e)\s+[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s+(?:[A-Z]\.?\s*){1,4})*"
+    r"(?:\s*(?:&|y|and|e)\s+[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s+(?:[A-Z]\.?\s*){1,4})*"
+    r"\s*\(\d{4}[a-z]?\)"
+    r")",
+    re.UNICODE,
+)
+
+MLA_AUTHOR_RE = re.compile(
+    r"^[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s+[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü\s]+\.",
+    re.UNICODE,
+)
+
+IEEE_BRACKET_RE = re.compile(
+    r"^\[\d+\]\s+[A-ZÁÉÍÓÚÑÜ]\.?\s+[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+",
+    re.UNICODE,
+)
+
+VANCOUVER_NUM_RE = re.compile(
+    r"^\d+\.\s+[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+\s+[A-Z](?:\s*[A-Z])?[\.,]",
+    re.UNICODE,
+)
+
+AUTHOR_NAME_RE = re.compile(
+    r"\b[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]{2,},\s*(?:[A-Z]\.?\s*){1,4}\b",
+    re.UNICODE,
+)
+
+IN_TEXT_CITATION_RE = re.compile(
+    r"\("
+    r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+"
+    r"(?:\s+(?:et\s+al\.?|y\s+(?:col\.?|otros)|and\s+others?))?"
+    r"[\s,]+\d{4}[a-z]?"
+    r"(?:\s*;\s*[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+(?:\s+(?:et\s+al\.?|y\s+col\.?))?\s*,?\s*\d{4}[a-z]?)*"
+    r"\)",
+    re.UNICODE,
+)
+
 BIB_RE_LIST = [
-    re.compile(
-        r"^[A-ZÁÉÍÓÚÑ][a-záéíóúñ'\-]+,\s(?:[A-Z]\.\s?){1,4}(?:,\s(?:[A-Z]\.\s?)){0,3}"
-        r"(?:\s(?:&|y|and)\s[A-ZÁÉÍÓÚÑ][a-záéíóúñ'\-]+,\s(?:[A-Z]\.\s?){1,4})*"
-        r"\s\(\d{4}[a-z]?\)\.\s",
-        re.UNICODE
-    ),
-    re.compile(
-        r"^[A-ZÁÉÍÓÚÑ][a-záéíóúñ'\-]+,\s(?:[A-Z]\.\s?){1,4}.*\b(19|20)\d{2}[a-z]?\.\s*$",
-        re.UNICODE
-    ),
+    APA_AUTHOR_YEAR_RE,
+    MLA_AUTHOR_RE,
+    IEEE_BRACKET_RE,
+    VANCOUVER_NUM_RE,
+    AUTHOR_NAME_RE,
+    IN_TEXT_CITATION_RE,
 ]
 
 def is_bibliography_heading(line: str) -> bool:
+    """
+    ¿La línea es un título de sección bibliográfica?
+    """
     return bool(HEAD_RE.match(line.strip()))
 
 def is_reference_line(line: str) -> bool:
+    """
+    Detecta si una línea aislada parece una referencia bibliográfica.
+    """
+    if not line or len(line.strip()) < 10:
+        return False
+
     s = _strip_bullet(line)
     if not s:
         return False
-    for rx in BIB_RE_LIST:
-        if rx.search(s):
+
+    # 1) Patrones típicos de citas (APA, MLA, IEEE, etc.)
+    for bib_re in BIB_RE_LIST:
+        if bib_re.search(s):
             return True
-    if YEAR_RE.search(s) and (
-        DOI_URL_HINT_RE.search(s) or JOURNAL_HINT_RE.search(s) or PUBLISHER_HINT_RE.search(s)
-    ):
-        if s.count(",") >= 2 or ETAL_RE.search(s) or URL_RE.search(s):
-            return True
-    if URL_RE.search(s) and YEAR_RE.search(s):
+
+    # 2) Heurísticas basadas en año + metadatos
+    has_year = YEAR_RE.search(s)
+    has_doi_urn = DOI_URL_HINT_RE.search(s)
+    has_journal_meta = JOURNAL_HINT_RE.search(s)
+    has_publisher = PUBLISHER_HINT_RE.search(s)
+    has_url = URL_BASE_RE.search(s)
+    has_etal = ETAL_RE.search(s)
+
+    # Año + DOI/URN/URL
+    if has_year and (has_doi_urn or has_url):
         return True
+
+    # Año + metadatos de revista
+    if has_year and has_journal_meta:
+        return True
+
+    # Año + editorial
+    if has_year and has_publisher:
+        return True
+
+    # "et al." + año
+    if has_etal and has_year:
+        return True
+
+    # Muchos autores separados por comas + año
+    if has_year and s.count(",") >= 2:
+        return True
+
+    # Título entre comillas + año
+    if has_year and re.search(r'["\'“”].+?["\'“”]\s*[\.,]', s):
+        return True
+
+    # Formatos IEEE/Vancouver con número o corchete al inicio
+    if re.match(r"^(\[\d+\]|\d+[\.\)])\s+", s):
+        if has_year or s.count(",") >= 1:
+            return True
+
+    # Múltiples patrones de "Apellido, I."
+    author_pattern_count = len(
+        re.findall(r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s*(?:[A-Z]\.?\s*)+", s)
+    )
+    if author_pattern_count >= 2:
+        return True
+
+    # Citas en texto estilo (Autor, 2020)
+    if IN_TEXT_CITATION_RE.search(s):
+        return True
+
     return False
+def is_reference_fragment(text: str) -> bool:
+    """
+    Versión MEJORADA Y MÁS CONSERVADORA.
+    Solo marca como referencia si hay MÚLTIPLES señales fuertes.
+    """
+    if not text or len(text.strip()) < 20:  # Aumentado de 10 a 20
+        return False
 
+    lines = text.splitlines()
+    ref_line_count = 0
+
+    for raw_line in lines:
+        line = _strip_bullet(raw_line).strip()
+        if not line or len(line) < 15:  # Aumentado de 10 a 15
+            continue
+
+        if is_reference_line(line):
+            ref_line_count += 1
+
+        if is_bibliography_heading(line):
+            return True
+
+    # CAMBIO CRÍTICO: Ahora requiere 3+ líneas (antes era 2+)
+    if ref_line_count >= 3:
+        return True
+
+    # Análisis del texto plano completo
+    flat = " ".join(_strip_bullet(s).strip() for s in lines if s.strip())
+
+    # Contador de señales fuertes
+    strong_signals = 0
+    
+    has_year = YEAR_RE.search(flat)
+    has_doi = DOI_URL_HINT_RE.search(flat)
+    has_journal = JOURNAL_HINT_RE.search(flat)
+    has_publisher = PUBLISHER_HINT_RE.search(flat)
+    has_etal = ETAL_RE.search(flat)
+    has_url = URL_BASE_RE.search(flat)
+
+    if has_year and has_doi:
+        strong_signals += 2
+    if has_year and has_url and 'doi' in flat.lower():
+        strong_signals += 2
+    if has_year and has_journal:
+        strong_signals += 1
+    if has_year and has_publisher and flat.count(",") >= 3:  # Más restrictivo
+        strong_signals += 1
+    if has_etal and has_year:
+        strong_signals += 1
+
+    # Múltiples autores + año
+    author_count = len(
+        re.findall(r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s*(?:[A-Z]\.?\s*)+", flat)
+    )
+    if author_count >= 3 and has_year:  # Aumentado de 2 a 3
+        strong_signals += 1
+
+    # CAMBIO CRÍTICO: Requiere 3+ señales fuertes (antes aceptaba con menos)
+    return strong_signals >= 3
+
+def has_author_pattern(text: str) -> bool:
+    """
+    Heurística adicional: ¿parece que el texto contiene nombres de autores típicos de bibliografía?
+    """
+    if not text:
+        return False
+
+    # Apellido, I.
+    if re.search(r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s*(?:[A-Z]\.?\s*)+", text):
+        return True
+
+    # (Apellido, 2020) u otros patrones similares
+    if IN_TEXT_CITATION_RE.search(text):
+        return True
+
+    # (2020) + apellido
+    if re.search(r"\(\d{4}[a-z]?\)", text) and re.search(r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü]{2,}", text):
+        return True
+
+    # Apellido y Apellido + año
+    apellidos_pattern = r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]{2,}"
+    if re.search(rf"{apellidos_pattern}\s+(?:y|and|&|e)\s+{apellidos_pattern}", text):
+        if YEAR_RE.search(text):
+            return True
+
+    return False
 def detect_bibliography_pages(pages: List[Tuple[int, str]]) -> set:
-    skip = set()
+    """
+    Versión MEJORADA Y MÁS CONSERVADORA.
+    Umbrales más altos para evitar falsos positivos.
+    """
+    skip: set[int] = set()
     in_bib_section = False
+    consecutive_ref_pages = 0
 
-    for num, txt in pages:
-        lines_raw = [l for l in txt.splitlines() if l.strip()]
-        lines = [_strip_bullet(l.strip()) for l in lines_raw if l.strip()]
+    for idx, (num, txt) in enumerate(pages):
+        lines_raw = [l.strip() for l in txt.splitlines() if l.strip()]
+        if not lines_raw:
+            continue
+
+        lines = [_strip_bullet(l) for l in lines_raw if l.strip()]
         if not lines:
             continue
 
-        head_zone = lines[:8]
+        # --- Encabezado en las primeras 5 líneas (antes 10) ---
+        head_zone = lines[:5]
         has_heading = any(is_bibliography_heading(l) for l in head_zone)
-
-        ref_count = sum(1 for l in lines if is_reference_line(l))
-        url_count = sum(1 for l in lines if URL_RE.search(l))
-        year_tokens = len(YEAR_RE.findall(" ".join(lines)))
-        bullet_lines = sum(1 for l in lines_raw if BULLET_PREFIX_RE.match(l))
-        n = max(1, len(lines))
-
-        ref_ratio = ref_count / n
-        url_ratio = url_count / n
 
         if has_heading:
             skip.add(num)
             in_bib_section = True
+            consecutive_ref_pages = 1
+            logger.info(f"Página {num}: Encabezado de bibliografía detectado")
             continue
 
-        if (
-            ref_count >= 2
-            or (ref_ratio >= 0.25)
-            or (url_count >= 3 and year_tokens >= 2)
-            or (bullet_lines >= 3 and (ref_count + url_count) >= 2)
-            or (url_ratio >= 0.35 and year_tokens >= 1)
-        ):
+        # --- Métricas básicas de la página ---
+        ref_count = sum(1 for l in lines if is_reference_line(l))
+        url_count = sum(1 for l in lines if URL_BASE_RE.search(l))
+        year_count = len(YEAR_RE.findall(" ".join(lines)))
+        bullet_lines = sum(1 for l in lines_raw if BULLET_PREFIX_RE.match(l))
+        etal_count = sum(1 for l in lines if ETAL_RE.search(l))
+        doi_count = sum(1 for l in lines if DOI_URL_HINT_RE.search(l))
+        journal_count = sum(1 for l in lines if JOURNAL_HINT_RE.search(l))
+        publisher_count = sum(1 for l in lines if PUBLISHER_HINT_RE.search(l))
+        author_pattern_count = sum(
+            1
+            for l in lines
+            if re.search(r"[A-ZÁÉÍÓÚÑÜ][a-záéíóúñü'\-]+,\s*(?:[A-Z]\.?\s*)+", l)
+        )
+
+        n = max(1, len(lines))
+        ref_ratio = ref_count / n
+
+        # --- UMBRALES MÁS ALTOS PARA MARCAR COMO BIBLIOGRAFÍA ---
+        
+        # CAMBIO 1: Requiere 5+ referencias (antes 3+) o ratio >= 0.40 (antes 0.30)
+        if ref_count >= 5 or ref_ratio >= 0.40:
             skip.add(num)
             in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por referencias ({ref_count})")
             continue
 
-        if in_bib_section and (ref_count >= 1 and (url_count >= 1 or year_tokens >= 1)):
+        # CAMBIO 2: Requiere 5+ URLs y 5+ años (antes 3+)
+        if url_count >= 5 and year_count >= 5:
             skip.add(num)
-        else:
-            in_bib_section = False
-
-    return skip
-
-def is_reference_fragment(text: str) -> bool:
-    if not text:
-        return False
-
-    for raw in text.splitlines():
-        l = _strip_bullet(raw)
-        if not l:
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por URLs y años")
             continue
-        if is_reference_line(l):
-            return True
-        if (URL_RE.search(l) and YEAR_RE.search(l)) or (ETAL_RE.search(l) and YEAR_RE.search(l)):
-            return True
-        if is_bibliography_heading(l):
-            return True
-        if PUBLISHER_HINT_RE.search(l) and YEAR_RE.search(l):
-            return True
 
-    flat = " ".join(_strip_bullet(s) for s in text.split())
-    if YEAR_RE.search(flat) and (
-        DOI_URL_HINT_RE.search(flat) or JOURNAL_HINT_RE.search(flat) or PUBLISHER_HINT_RE.search(flat)
-    ):
-        if flat.count(",") >= 2 or ETAL_RE.search(flat) or URL_RE.search(flat):
-            return True
+        # CAMBIO 3: Requiere 5+ viñetas y 4+ indicadores (antes 3+ y 2+)
+        if bullet_lines >= 5 and (ref_count + url_count) >= 4:
+            skip.add(num)
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por viñetas e indicadores")
+            continue
 
-    return False
+        # CAMBIO 4: Requiere 4+ DOIs (antes 2+)
+        if doi_count >= 4:
+            skip.add(num)
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por DOIs")
+            continue
+
+        # CAMBIO 5: Requiere 4+ metadatos y 4+ años (antes 2+ y 2+)
+        if journal_count >= 4 and year_count >= 4:
+            skip.add(num)
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por metadatos de revista")
+            continue
+
+        # CAMBIO 6: Requiere 2+ publisher y 4+ años (antes 1+ y 2+)
+        if publisher_count >= 2 and year_count >= 4:
+            skip.add(num)
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por publisher")
+            continue
+
+        # CAMBIO 7: Requiere 5+ patrones de autor (antes 3+)
+        if author_pattern_count >= 5:
+            skip.add(num)
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por patrones de autor")
+            continue
+
+        # CAMBIO 8: Requiere 4+ etal y 4+ años (antes 2+ y 2+)
+        if etal_count >= 4 and year_count >= 4:
+            skip.add(num)
+            in_bib_section = True
+            consecutive_ref_pages += 1
+            logger.info(f"Página {num}: Bibliografía por et al.")
+            continue
+
+        # --- Continuación de sección con criterios MÁS ESTRICTOS ---
+        if in_bib_section:
+            # CAMBIO 9: Criterios más estrictos para continuar sección
+            if (
+                (ref_count >= 2 and (url_count >= 2 or year_count >= 2))
+                or (url_count >= 3 and year_count >= 2)
+                or (ref_ratio >= 0.25)  # Aumentado de 0.20
+                or (bullet_lines >= 3 and year_count >= 2)
+                or (author_pattern_count >= 3)  # Aumentado de 2
+            ):
+                skip.add(num)
+                consecutive_ref_pages += 1
+                logger.info(f"Página {num}: Continuación de bibliografía")
+            else:
+                # Romper sección solo después de verificar siguiente página
+                if consecutive_ref_pages >= 2:
+                    if idx + 1 < len(pages):
+                        next_num, next_txt = pages[idx + 1]
+                        next_lines = [
+                            _strip_bullet(l.strip())
+                            for l in next_txt.splitlines()
+                            if l.strip()
+                        ]
+                        next_ref_count = sum(
+                            1 for l in next_lines if is_reference_line(l)
+                        )
+                        if next_ref_count < 2:  # Aumentado de 1
+                            in_bib_section = False
+                            consecutive_ref_pages = 0
+                            logger.info(f"Página {num}: Fin de bibliografía")
+                    else:
+                        in_bib_section = False
+                        consecutive_ref_pages = 0
+                else:
+                    consecutive_ref_pages = 0
+
+    logger.info(f"Total páginas marcadas como bibliografía: {len(skip)}/{len(pages)}")
+    return skip
 
 EN_COMMON_WORDS = {
     "the", "and", "or", "but", "if", "then", "else", "when", "where", "who", "what",
@@ -421,7 +802,7 @@ def is_english_fragment(text: str) -> bool:
     if not text:
         return False
 
-    cleaned = URL_RE.sub(" ", text)
+    cleaned = URL_BASE_RE.sub(" ", text)
     lower = cleaned.lower()
 
     if any(ch in lower for ch in "áéíóúüñ"):
@@ -455,7 +836,7 @@ def is_latin_fragment(text: str) -> bool:
     if not text:
         return False
 
-    cleaned = URL_RE.sub(" ", text)
+    cleaned = URL_BASE_RE.sub(" ", text)
     lower = cleaned.lower()
     tokens = EN_TOKEN_RE.findall(lower)
     if not tokens:
@@ -698,7 +1079,7 @@ def read_pptx_slides(bio: BytesIO) -> List[Tuple[int, str]]:
                         if slide_h and float(getattr(sh, "top", 0)) >= 0.75 * slide_h:
                             if (
                                 is_reference_fragment(raw_norm)
-                                or URL_RE.search(raw_norm)
+                                or URL_BASE_RE.search(raw_norm)
                                 or (
                                     PUBLISHER_HINT_RE.search(raw_norm)
                                     and YEAR_RE.search(raw_norm)
@@ -766,60 +1147,169 @@ def extract_pages(file_bytes: bytes, file_name: str) -> Tuple[List[Tuple[int, st
         return read_txt_pages(bio), "Página"
 
     return [], "Página"
-
 def build_global_text(
     pages: List[Tuple[int, str]]
 ) -> Tuple[str, List[int], List[Tuple[int, int, int]]]:
+    """
+    Construye:
+    - texto_global: concatenación de todas las páginas con separador PAGE_SEP
+    - starts: lista con el offset inicial (en texto_global) de cada página
+    - bounds: lista de tuplas (start, end, page_number) sincronizada con starts
+
+    IMPORTANTE:
+    - starts[i] y bounds[i] SIEMPRE corresponden a la MISMA página.
+    - El separador PAGE_SEP solo se añade entre páginas, nunca antes de la primera
+      ni después de la última.
+    """
     parts: List[str] = []
     starts: List[int] = []
     bounds: List[Tuple[int, int, int]] = []
-    cur = 0
 
+    cur = 0
     for idx, (num, txt) in enumerate(pages):
+        # Offset donde empieza esta página en el texto global
         starts.append(cur)
         start = cur
 
+        # Texto de la página
         parts.append(txt)
         cur += len(txt)
 
         end = cur
         bounds.append((start, end, num))
 
+        # Añadir separador entre páginas (NO después de la última)
         if idx < len(pages) - 1:
             parts.append(PAGE_SEP)
             cur += len(PAGE_SEP)
 
     return "".join(parts), starts, bounds
 
-def chunk_by_pages(pages: List[Tuple[int, str]], max_chars: int) -> List[Tuple[int, int]]:
-    ranges: List[Tuple[int, int]] = []
-    i = 0
-    while i < len(pages):
-        j = i
-        total = 0
-        while j < len(pages):
-            candidate = len(pages[j][1]) + (0 if j == i else len(PAGE_SEP))
-            if total + candidate > max_chars and j > i:
-                break
-            total += candidate
-            j += 1
-        ranges.append((i, j))
-        i = j
-    return ranges
+def chunk_by_pages_with_offsets(
+    pages: List[Tuple[int, str]],
+    starts: List[int],
+    bounds: List[Tuple[int, int, int]],
+    max_chars: int,
+) -> List[Tuple[int, int, int, int]]:
+    """
+    Devuelve una lista de chunks, cada uno como:
+        (chunk_start_offset, chunk_end_offset, first_page_idx, last_page_idx_exclusive)
 
-def page_for_offset(bounds: List[Tuple[int, int, int]], offset: int) -> int:
-    starts = [b[0] for b in bounds]
-    idx = bisect_right(starts, offset) - 1
-    if idx < 0:
+    - chunk_start_offset / chunk_end_offset: offsets en texto_global (coherentes con `starts` y `bounds`)
+    - first_page_idx / last_page_idx_exclusive: índices de página en `pages` (0-based, tipo range(i, j))
+    """
+    chunks: List[Tuple[int, int, int, int]] = []
+    n = len(pages)
+    if n == 0:
+        return chunks
+
+    i = 0
+    while i < n:
+        # Primera página del chunk
+        first_idx = i
+        chunk_start = starts[first_idx]
+
+        j = i
+        last_offset = chunk_start
+        while j < n:
+            page_start, page_end, _ = bounds[j]
+            page_len = page_end - page_start
+
+            # Si no es la primera página, añadimos el separador PAGE_SEP
+            extra = page_len
+            if j > first_idx:
+                extra += len(PAGE_SEP)
+
+            # Longitud actual del chunk (desde chunk_start hasta last_offset)
+            current_len = last_offset - chunk_start
+            if current_len + extra > max_chars and j > first_idx:
+                break
+
+            # Aceptamos esta página en el chunk
+            last_offset = page_end
+            j += 1
+
+        # last_offset es el final del chunk (en texto_global)
+        chunks.append((chunk_start, last_offset, first_idx, j))
+        i = j
+
+    return chunks
+
+from bisect import bisect_right  # ya lo tienes importado arriba
+
+def page_for_offset(
+    starts: List[int],
+    bounds: List[Tuple[int, int, int]],
+    offset: int
+) -> int:
+    """
+    Dado un offset en el texto global, devuelve el número de página/diapositiva.
+
+    - starts[i]  = offset donde empieza el texto de la página i (en texto_global)
+    - bounds[i]  = (start_text, end_text, page_num) para esa misma página
+
+    Usamos bisect_right sobre starts para localizar la página en O(log n).
+    Si el offset cae en el separador PAGE_SEP, se asigna a la página anterior.
+    """
+    if not starts or not bounds:
+        return 1
+
+    # Normalizar offset extremo inferior
+    if offset <= starts[0]:
         idx = 0
+    else:
+        # bisect_right devuelve la posición de inserción, restamos 1 para obtener
+        # el índice de la página cuyo inicio es el último <= offset
+        idx = bisect_right(starts, offset) - 1
+        if idx < 0:
+            idx = 0
+        elif idx >= len(starts):
+            idx = len(starts) - 1
+
     return bounds[idx][2]
+
 
 @st.cache_resource(show_spinner=False)
 def get_language_tool(lang_code: str):
+    """
+    Versión CORREGIDA con todas las reglas activas por defecto.
+    
+    IMPORTANTE: No intentamos habilitar reglas específicas porque:
+    1. Los nombres de las reglas pueden variar entre versiones
+    2. Muchas reglas ya están habilitadas por defecto
+    3. Es más seguro DESACTIVAR solo las problemáticas
+    """
     if not find_java():
         raise RuntimeError("Java no detectado. Activa tu JRE/JDK para usar LanguageTool local.")
+    
     import language_tool_python as lt
-    return lt.LanguageTool(lang_code)
+    
+    # Crear instancia básica - LanguageTool ya viene con TODAS las reglas activas
+    tool = lt.LanguageTool(lang_code)
+    # Ver cuántas reglas están activas
+    logger.info(f"Reglas activas: {len(tool.enabled_rules)}")
+    for rule in list(tool.enabled_rules)[:10]:
+        logger.info(f"  - {rule.ruleId}")
+    
+    # Solo desactivamos reglas que causan falsos positivos
+    rules_to_disable = [
+        # Reglas de formato que generan ruido
+        # 'WHITESPACE_RULE',           # Espacios en blanco
+        # 'DOUBLE_PUNCTUATION',        # Puntuación doble
+        
+        # NO desactivamos UPPERCASE_SENTENCE_START para que detecte mayúsculas
+    ]
+    
+    for rule in rules_to_disable:
+        try:
+            tool.disable_rule(rule)
+        except Exception:
+            pass
+    
+    logger.info(f"LanguageTool configurado: {len(tool.enabled_rules)} reglas activas")
+    
+    return tool
+
 
 LT_LOCK = threading.Lock()
 
@@ -911,121 +1401,343 @@ def analyze_file(
     modismos_patterns: List[ModismoPattern] | None = None,
     analizar_modismos: bool = False,
 ) -> pd.DataFrame:
+    # 1) Extraer páginas/diapositivas
     pages, unit_label = extract_pages(file_bytes, file_name)
     if not pages:
         return pd.DataFrame([])
 
+    logger.info("=" * 80)
+    logger.info(f"Iniciando análisis de: {file_name}")
+    logger.info(f"Idioma: {lang_code}")
+    logger.info(f"Excluir bibliografía: {excluir_bibliografia}")
+    logger.info(f"Analizar modismos: {analizar_modismos}")
+    logger.info("=" * 80)
+
+    # 2) Ajustar dinámicamente max_chars_call según el tamaño del documento
+    total_chars = sum(len(txt) for _, txt in pages)
+    target_blocks = 14
+    approx_chars_per_block = max(5000, min(20000, total_chars // max(1, target_blocks)))
+    if approx_chars_per_block < max_chars_call:
+        max_chars_call = approx_chars_per_block
+
     ext = os.path.splitext(file_name)[1].lower()
 
+    # 3) Detectar páginas de bibliografía (para filtros posteriores)
     skip_pages = detect_bibliography_pages(pages) if excluir_bibliografia else set()
-
     if excluir_bibliografia and ext in (".txt", ".docx", ".pptx"):
+        # Para estos formatos, preferimos NO saltarnos páginas completas,
+        # solo filtrar por contexto bibliográfico.
         skip_pages = set()
 
+    # 4) Construir texto global y rangos de páginas (SINCRONIZADOS)
     st.session_state["_lang_code"] = lang_code
-    _, starts, bounds = build_global_text(pages)
-    ranges = chunk_by_pages(pages, max_chars_call)
+    texto_global, starts, bounds = build_global_text(pages)
+
+    # Chunks basados en offsets globales para mantener coherencia con `starts` y `bounds`
+    ranges = chunk_by_pages_with_offsets(
+        pages=pages,
+        starts=starts,
+        bounds=bounds,
+        max_chars=max_chars_call,
+    )
+
+    # 5) Instanciar LanguageTool
     tool = get_language_tool(lang_code)
+
 
     rows: List[Dict[str, Any]] = []
     lock = threading.Lock()
 
-    def worker(rng: Tuple[int, int]):
-        i, j = rng
-        group_start = starts[i]
-        txt = PAGE_SEP.join([pages[k][1] for k in range(i, j)])
-        matches = analyze_text(tool, txt)
+    total_ranges = len(ranges)
+    done_ranges = 0
+
+    max_effective_workers = max(1, min(workers, 3))
+    progress_chunks_ph = st.empty()
+
+    def _update_chunk_progress():
+        if total_ranges <= 0:
+            return
+        pct = done_ranges / total_ranges
+        detail = f"{done_ranges}/{total_ranges} bloques analizados"
+        try:
+            render_task_progress(
+                progress_chunks_ph,
+                "Analizando bloques de texto (LanguageTool)",
+                pct,
+                detail,
+            )
+        except Exception:
+            pass
+
+    def _extract_sentence(chunk_text: str, offset: int) -> str:
+        """
+        Extrae una 'oración' aproximada alrededor del error dentro del chunk.
+        Busca saltos de línea o separadores de oración.
+        """
+        # Buscar inicio de oración en el chunk
+        start = max(0, offset - 200)
+        end = min(len(chunk_text), offset + 200)
+
+        ventana = chunk_text[start:end]
+
+        # Cortar por saltos de línea para hacerlo más legible
+        lineas = ventana.split("\n")
+        oracion = " ".join(l.strip() for l in lineas if l.strip())
+
+        if len(oracion) > 250:
+            oracion = oracion[:250].rstrip() + "..."
+
+        return oracion
+    def worker(rng: Tuple[int, int, int, int]):
+        """
+        Procesa un rango de páginas y devuelve las incidencias detectadas
+        en ese chunk.
+
+        rng = (chunk_start_offset, chunk_end_offset, first_page_idx, last_page_idx_exclusive)
+        """
+        nonlocal done_ranges
+
+        chunk_start_offset, chunk_end_offset, first_idx, last_idx_exclusive = rng
+
+        # Texto ORIGINAL del chunk (para contexto / oraciones)
+        chunk_text_original = texto_global[chunk_start_offset:chunk_end_offset]
+
+        if not chunk_text_original.strip():
+            with lock:
+                done_ranges += 1
+                _update_chunk_progress()
+            return []
+
+        # 🔐 NUEVO: enmascarar URLs para que NO pasen a LanguageTool
+        # Conserva longitud y saltos de línea ⇒ offsets siguen siendo válidos
+        chunk_text_masked, url_spans = mask_urls_preserve_length(chunk_text_original)
+
+        # Analizar con LanguageTool usando el texto enmascarado
+        matches = analyze_text(tool, chunk_text_masked)
+
         local_rows: List[Dict[str, Any]] = []
+
         for m in matches:
-            try:
-                off = int(getattr(m, "offset", -1) or -1)
-            except Exception:
-                off = -1
+            offset_in_chunk = m.offset
 
-            global_off = group_start + (off if off >= 0 else 0)
-            page_no = page_for_offset(bounds, global_off)
+            # Offset global = inicio global del chunk + offset local
+            global_offset = chunk_start_offset + offset_in_chunk
 
-            sentence = safe_str(getattr(m, "sentence", ""))
-            context = safe_str(getattr(m, "context", ""))
+            # Determinar la página real con el offset global
+            page_num = page_for_offset(starts, bounds, global_offset)
 
-            if URL_RE.search(sentence) or URL_RE.search(context):
+            # Extraer contexto desde el TEXTO ORIGINAL (para que el usuario vea el texto real)
+            ctx_start = max(0, offset_in_chunk - 120)
+            ctx_end = min(len(chunk_text_original), offset_in_chunk + m.errorLength + 120)
+            contexto = chunk_text_original[ctx_start:ctx_end]
+
+            # Oración más legible dentro del chunk (usamos también el texto original)
+            oracion = _extract_sentence(chunk_text_original, offset_in_chunk)
+
+            # Evitar páginas marcadas como bibliografía (solo si se usa skip_pages)
+            if excluir_bibliografia and page_num in skip_pages:
                 continue
 
-            if excluir_bibliografia:
-                if page_no in skip_pages:
-                    continue
-                if is_reference_fragment(sentence) or is_reference_fragment(context):
-                    continue
-
-            if is_code_fragment(sentence) or is_code_fragment(context):
-                continue
-
-            if lang_code.startswith("es"):
-                if is_english_fragment(sentence) or is_english_fragment(context):
-                    continue
-                if is_latin_fragment(sentence) or is_latin_fragment(context):
-                    continue
+            mensaje = m.message or "Error gramatical o de estilo"
+            sugerencias = ", ".join(m.replacements[:3]) if m.replacements else ""
+            regla = m.ruleId or "UNKNOWN"
+            categoria = getattr(m, "category", None) or "General"
 
             local_rows.append({
                 "Archivo": file_name,
-                "Página/Diapositiva": page_no,
+                "Página/Diapositiva": page_num,
                 "BloqueTipo": unit_label,
-                "Mensaje": safe_str(getattr(m, "message", "")),
-                "Sugerencias": ", ".join(
-                    getattr(m, "replacements", [])[:5]
-                ) if isinstance(getattr(m, "replacements", []), list) else "",
-                "Oración": sentence,
-                "Contexto": context,
-                "Regla": safe_str(getattr(m, "ruleId", "")),
-                "Categoría": safe_str(getattr(m, "category", "")),
+                "Mensaje": mensaje,
+                "Sugerencias": sugerencias,
+                "Oración": oracion,
+                "Contexto": contexto,
+                "Regla": regla,
+                "Categoría": categoria,
             })
+
+        with lock:
+            done_ranges += 1
+            _update_chunk_progress()
+
         return local_rows
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+
+
+    # 6) Ejecutar workers (paralelismo a nivel de chunks)
+    with ThreadPoolExecutor(max_workers=max_effective_workers) as ex:
         futures = [ex.submit(worker, r) for r in ranges]
         for fut in as_completed(futures):
             part = fut.result()
             with lock:
                 rows.extend(part)
 
+    # 7) Construir DataFrame principal de LanguageTool
     if not rows:
         df_lt = pd.DataFrame([])
     else:
         df_lt = pd.DataFrame.from_records(rows)
 
+        # 🔍 Filtro extra: eliminar incidencias cuya "Oración" es prácticamente solo un enlace
+        def _looks_like_url_only(text: str) -> bool:
+            if not text:
+                return False
+            t = text.strip()
+            # Quitar comillas/puntos alrededor
+            t = t.strip("()[]{}<>\"'.,;: ")
+            if len(t) < 8:
+                return False
+            m = URL_BASE_RE.fullmatch(t)
+            if m:
+                return True
+            # También casos donde el enlace es >70% del texto
+            urls = URL_BASE_RE.findall(t)
+            if not urls:
+                return False
+            total_len = len(t)
+            urls_len = sum(len(u[0]) if isinstance(u, tuple) else len(u) for u in urls)
+            return urls_len / max(1, total_len) > 0.7
+
+        df_lt = df_lt.loc[~df_lt["Oración"].fillna("").apply(_looks_like_url_only)].copy()
+
+
+    # 8) Filtros avanzados: bibliografía, código, inglés
     if not df_lt.empty:
+        initial_count = len(df_lt)
+        logger.info(f"Errores detectados inicialmente: {initial_count}")
+
+        # --------------------------
+        # FILTRO 1: bibliografía
+        # --------------------------
         if excluir_bibliografia:
-            mask_ref = (
-                df_lt["Oración"].fillna("").apply(is_reference_fragment)
-                | df_lt["Contexto"].fillna("").apply(is_reference_fragment)
+            before_filtro1 = len(df_lt)
+
+            def is_clearly_bibliographic(text: str) -> bool:
+                if not text or len(text) < 30:
+                    return False
+
+                # IEEE "[1] A. Author..."
+                if re.search(r'^\[?\d+\]?\s+[A-Z]\.\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+.*\d{4}', text):
+                    return True
+
+                # Vancouver "1. Autor J..."
+                if re.search(r'^\d+\.\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+\s+[A-Z]\b.*\d{4}', text):
+                    return True
+
+                # [1] ... and 2020
+                if re.search(r'\[\d+\].*\b(and|y|&)\b.*\d{4}', text, re.I):
+                    return True
+
+                # Palabras clave de publicación
+                pub_keywords = [
+                    r'\bProc\.', r'\bConf\.', r'\bInt\.', r'\bTrans\.', r'\bJ\.',
+                    r'\bvol\.', r'\bno\.', r'\bpp\.', r'\bEd\.',
+                ]
+                kw_count = sum(1 for kw in pub_keywords if re.search(kw, text, re.I))
+                has_year = bool(re.search(r'\b(19|20)\d{2}\b', text))
+
+                if kw_count >= 2 and has_year:
+                    return True
+
+                # DOI/URL académica
+                if re.search(r'(doi:|https?://doi\.org/)', text, re.I):
+                    return True
+
+                # Múltiples autores "Apellido, I."
+                author_pattern = r'[A-ZÁÉÍÓÚÑa-záéíóúñ]+,\s+[A-Z]\.'
+                author_count = len(re.findall(author_pattern, text))
+                if author_count >= 2 and has_year:
+                    return True
+
+                signals = 0
+                if re.search(r'\(\d{4}[a-z]?\)', text):
+                    signals += 2
+                if re.search(r'\bet\s+al\.', text, re.I):
+                    signals += 2
+                if re.search(r'["“].+["”]', text):
+                    signals += 1
+                if re.search(r'\bpp?\.\s*\d+[-–]\d+', text, re.I):
+                    signals += 2
+
+                return signals >= 3
+
+            mask_bib = (
+                df_lt["Oración"].fillna("").apply(is_clearly_bibliographic) |
+                df_lt["Contexto"].fillna("").apply(is_clearly_bibliographic)
             )
-            df_lt = df_lt.loc[~mask_ref].copy()
+            df_lt = df_lt.loc[~mask_bib].copy()
+            filtered = before_filtro1 - len(df_lt)
+            logger.info(f"Filtro bibliografía: {filtered} errores eliminados")
+
+        # --------------------------
+        # FILTRO 2: código
+        # --------------------------
+        before_filtro2 = len(df_lt)
+
+        def is_obvious_code(text: str) -> bool:
+            if not text or len(text) < 15:
+                return False
+            if re.search(r'\b(function|class|def|var|const|import|return)\b', text):
+                return True
+            symbols = sum(1 for c in text if c in '{}[]();=<>:/*')
+            if len(text) > 10 and symbols / len(text) > 0.35:
+                return True
+            if re.search(r'\)\s*;?\s*$', text.strip()):
+                return True
+            return False
 
         mask_code = (
-            df_lt["Oración"].fillna("").apply(is_code_fragment)
-            | df_lt["Contexto"].fillna("").apply(is_code_fragment)
+            df_lt["Oración"].fillna("").apply(is_obvious_code) |
+            df_lt["Contexto"].fillna("").apply(is_obvious_code)
         )
         df_lt = df_lt.loc[~mask_code].copy()
+        filtered = before_filtro2 - len(df_lt)
+        logger.info(f"Filtro código: {filtered} errores eliminados")
 
+        # --------------------------
+        # FILTRO 3: inglés puro (si idioma base es español)
+        # --------------------------
         if lang_code.startswith("es"):
+            before_filtro3 = len(df_lt)
+
+            def is_pure_english_text(text: str) -> bool:
+                if not text or len(text) < 30:
+                    return False
+                if re.search(r'[áéíóúüñ]', text, re.I):
+                    return False
+                english_words = {
+                    'the', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'with',
+                    'by', 'from', 'this', 'that', 'these', 'those', 'is', 'are'
+                }
+                words = re.findall(r"[a-zA-Z]+", text.lower())
+                if len(words) < 5:
+                    return False
+                english_count = sum(1 for w in words if w in english_words)
+                return english_count / len(words) > 0.5
+
             mask_eng = (
-                df_lt["Oración"].fillna("").apply(is_english_fragment)
-                | df_lt["Contexto"].fillna("").apply(is_english_fragment)
+                df_lt["Oración"].fillna("").apply(is_pure_english_text) |
+                df_lt["Contexto"].fillna("").apply(is_pure_english_text)
             )
             df_lt = df_lt.loc[~mask_eng].copy()
+            filtered = before_filtro3 - len(df_lt)
+            logger.info(f"Filtro inglés: {filtered} errores eliminados")
 
-            mask_lat = (
-                df_lt["Oración"].fillna("").apply(is_latin_fragment)
-                | df_lt["Contexto"].fillna("").apply(is_latin_fragment)
-            )
-            df_lt = df_lt.loc[~mask_lat].copy()
+        # --------------------------
+        # FILTRO 4: páginas completas marcadas como bibliografía
+        # --------------------------
+        if excluir_bibliografia and "Página/Diapositiva" in df_lt.columns and skip_pages:
+            before_filtro4 = len(df_lt)
+            mask_bib_page = df_lt["Página/Diapositiva"].isin(skip_pages)
+            df_lt = df_lt.loc[~mask_bib_page].copy()
+            filtered = before_filtro4 - len(df_lt)
+            logger.info(f"Filtro páginas bibliográficas: {filtered} errores eliminados")
 
-        mask_url = (
-            df_lt["Oración"].fillna("").str.contains(URL_RE)
-            | df_lt["Contexto"].fillna("").str.contains(URL_RE)
-        )
-        df_lt = df_lt.loc[~mask_url].copy()
+        final_count = len(df_lt)
+        logger.info(f"Errores finales: {final_count} (de {initial_count} iniciales)")
+        if initial_count > 0:
+            logger.info(f"Tasa de retención: {final_count / initial_count * 100:.1f}%")
 
+    # 9) Modismos argentinos (si corresponde)
     if analizar_modismos and lang_code.startswith("es") and modismos_patterns:
         if excluir_bibliografia and ext in (".txt", ".docx", ".pptx"):
             skip_for_modismos = None
@@ -1042,6 +1754,7 @@ def analyze_file(
     else:
         df_mod = pd.DataFrame([])
 
+    # 10) Combinar resultados LT + modismos
     if df_lt is None or df_lt.empty:
         final_df = df_mod
     elif df_mod is None or df_mod.empty:
@@ -1060,6 +1773,7 @@ def analyze_file(
     )
     final_df.reset_index(drop=True, inplace=True)
     return final_df
+
 
 # Patrones para limpiar caracteres no válidos en XML/Excel
 INVALID_XML_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
@@ -1085,7 +1799,98 @@ def _sanitize_excel_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
         return v
 
     return df.applymap(_clean_value)
+
+# Patrones para limpiar caracteres no válidos en XML/Excel
+INVALID_XML_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+def _sanitize_excel_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """
+    Elimina de un DataFrame los caracteres de control no permitidos por
+    el formato XLSX (XML 1.0) para evitar que Excel muestre errores
+    de reparación al abrir el archivo.
+    """
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    # Limpiar nombres de columnas
+    df.columns = [INVALID_XML_RE.sub("", str(c)) for c in df.columns]
+
+    # Limpiar el contenido de las celdas de tipo string
+    def _clean_value(v: Any) -> Any:
+        if isinstance(v, str):
+            return INVALID_XML_RE.sub("", v)
+        return v
+
+    return df.applymap(_clean_value)
+
+
+# 🔹 NUEVO: helper para detectar celdas vacías o "0"
+def _is_empty_or_zero_cell(v: Any) -> bool:
+    """
+    Devuelve True si el valor debe considerarse vacío para efectos del reporte:
+    - None, NaN
+    - cadena vacía
+    - cadena "0"
+    - número 0
+    """
+    if v is None:
+        return True
+
+    # Números
+    if isinstance(v, (int, float)):
+        if pd.isna(v):
+            return True
+        return v == 0
+
+    # Cadenas u otros tipos convertidos a string
+    s = str(v).strip()
+    if s == "" or s == "0":
+        return True
+    if s.lower() in ("nan", "none"):
+        return True
+
+    return False
+
+
+def _filter_resultados_empty_suggest_or_sentence(
+    df: Optional[pd.DataFrame],
+) -> Optional[pd.DataFrame]:
+    """
+    Elimina filas donde:
+    - Sugerencias esté vacía o sea "0"
+    - ORACIÓN esté vacía o sea "0"
+
+    (Se aplica sobre el DataFrame de resultados detallados).
+    """
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+    mask_drop = pd.Series(False, index=df.index)
+
+    if "Sugerencias" in df.columns:
+        mask_drop |= df["Sugerencias"].apply(_is_empty_or_zero_cell)
+
+    if "Oración" in df.columns:
+        mask_drop |= df["Oración"].apply(_is_empty_or_zero_cell)
+
+    if mask_drop.any():
+        before = len(df)
+        df = df.loc[~mask_drop].copy()
+        logger.info(
+            f"Filtro filas sin Sugerencias/Oración: "
+            f"{before - len(df)} filas eliminadas; {len(df)} filas restantes."
+        )
+
+    return df
+
+
 def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFrame) -> bytes:
+    # 🔹 OPCIONAL: asegurar limpieza antes de exportar
+    resultados_df = _filter_resultados_empty_suggest_or_sentence(resultados_df)
+    
     # Sanitizar dataframes de entrada para evitar caracteres ilegales en XML
     resultados_df = _sanitize_excel_df(resultados_df)
     resumen_completo_df = _sanitize_excel_df(resumen_completo_df)
@@ -1158,516 +1963,15 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
     out.seek(0)
     return out.getvalue()
 
-
 # ======================================================
-# FUNCIONES BROKEN LINK CHECKER (simplificadas)
+# UTILIDADES DE RED (para descarga masiva)
 # ======================================================
-def _strip_invisible(s: str) -> str:
-    return s.replace("\u200b", "").replace("\ufeff", "").strip()
-
-def _looks_like_url(s: str) -> bool:
-    s = s.lower().strip()
-    return s.startswith(("http://", "https://")) or "." in s
-
-def validate_url_structure(url: str) -> Tuple[bool, str]:
-    if "\\" in url:
-        return False, "URL contiene backslash (\\) - carácter inválido"
-    if " " in url and "%20" not in url:
-        return False, "URL contiene espacios sin encodear"
-    if not url.startswith(("http://", "https://")):
-        return False, "URL debe comenzar con http:// o https://"
-    try:
-        parsed = urlparse(url)
-        if not parsed.netloc:
-            return False, "URL sin dominio válido"
-        if "." not in parsed.netloc and "localhost" not in parsed.netloc.lower():
-            return False, "Dominio inválido (falta extensión)"
-        return True, ""
-    except Exception as e:
-        return False, f"Error de estructura: {str(e)}"
-
-def _normalize_one_url(
-    raw: str,
-    default_scheme: str = "https",
-    allow_mailto: bool = False,
-    allow_tel: bool = False,
-    allow_anchors_only: bool = False,
-) -> Tuple[Optional[str], str]:
-    if raw is None:
-        return None, "Vacío"
-    s = _strip_invisible(str(raw))
-    if not s:
-        return None, "Vacío"
-    s = s.replace("\n", " ").replace("\r", " ").strip()
-    if s.startswith("#"):
-        return (s, "") if allow_anchors_only else (None, "Anchor (#)")
-    low = s.lower()
-    if low.startswith("mailto:"):
-        return (s, "") if allow_mailto else (None, "mailto")
-    if low.startswith("tel:"):
-        return (s, "") if allow_tel else (None, "tel")
-    if not low.startswith(("http://", "https://")):
-        if _looks_like_url(s):
-            s = f"{default_scheme}://{s}"
-        else:
-            return None, "No parece URL"
-    struct_valid, struct_reason = validate_url_structure(s)
-    if not struct_valid:
-        return None, struct_reason
-    try:
-        p = urlparse(s)
-    except Exception:
-        return None, "Parseo inválido"
-    if not p.netloc:
-        return None, "Sin dominio"
-    netloc_raw = p.netloc.strip()
-    userinfo = ""
-    hostport = netloc_raw
-    if "@" in netloc_raw:
-        userinfo, hostport = netloc_raw.rsplit("@", 1)
-    host = hostport
-    port: Optional[str] = None
-    if ":" in hostport:
-        host, port = hostport.rsplit(":", 1)
-    try:
-        host_idn = host.encode("idna").decode("ascii")
-    except Exception:
-        host_idn = host
-    scheme = p.scheme.lower()
-    if port and ((scheme == "http" and port == "80") or (scheme == "https" and port == "443")):
-        port = None
-    if port:
-        netloc_clean = f"{host_idn}:{port}"
-    else:
-        netloc_clean = host_idn
-    if userinfo:
-        netloc_clean = f"{userinfo}@{netloc_clean}"
-    path = quote(p.path, safe="/%:@-._~!$&'()*+,;=")
-    query = quote(p.query, safe="=&%:@-._~!$&'()*+,;/?")
-    norm = urlunparse((scheme, netloc_clean, path, p.params, query, ""))
-    return norm, ""
-
-def _normalize_links(
-    series: pd.Series,
-    allow_mailto: bool,
-    allow_tel: bool,
-    allow_anchors_only: bool,
-    default_scheme: str,
-) -> Tuple[List[Tuple[int, str]], pd.DataFrame]:
-    out: List[Tuple[int, str]] = []
-    invalid_rows: List[Dict[str, Any]] = []
-    for excel_row, v in enumerate(series.tolist(), start=2):
-        url, reason = _normalize_one_url(
-            v,
-            default_scheme=default_scheme,
-            allow_mailto=allow_mailto,
-            allow_tel=allow_tel,
-            allow_anchors_only=allow_anchors_only,
-        )
-        if url is None:
-            invalid_rows.append({
-                "Fila_Excel": excel_row,
-                "Valor": "" if v is None else str(v),
-                "Motivo": reason,
-            })
-            continue
-        out.append((excel_row, url))
-    return out, pd.DataFrame(invalid_rows)
-
-def _httpx_available_or_warn() -> bool:
-    if httpx is None:
-        st.error("Falta la librería `httpx`. Instala con: `pip install httpx`")
-        return False
-    return True
-
 def _requests_available_or_warn() -> bool:
+    """Verifica que la librería `requests` esté instalada."""
     if requests is None:
         st.error("Falta la librería `requests`. Instala con: `pip install requests`")
         return False
     return True
-
-def _get_random_user_agent() -> str:
-    return random.choice(USER_AGENTS)
-
-def _build_headers_for_domain(url: str) -> Dict[str, str]:
-    headers = {
-        "user-agent": _get_random_user_agent(),
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "accept-language": "es-PE,es;q=0.9,en;q=0.8",
-        "accept-encoding": "gzip, deflate, br",
-        "dnt": "1",
-        "connection": "keep-alive",
-        "upgrade-insecure-requests": "1",
-    }
-    return headers
-
-def _host_key(url: str) -> str:
-    try:
-        p = urlparse(url)
-        return p.netloc.lower()
-    except Exception:
-        return "unknown"
-
-def _is_html_like(content_type: Optional[str]) -> bool:
-    if not content_type:
-        return False
-    ct = content_type.lower()
-    return "text/html" in ct or "application/xhtml" in ct
-
-def _is_binary_candidate(url: str) -> bool:
-    try:
-        p = urlparse(url)
-        path = p.path.lower()
-    except Exception:
-        return False
-    return any(path.endswith(ext) for ext in BINARY_EXTS)
-
-def _compute_retry_delay(retry_after_header: Optional[str], attempt: int) -> float:
-    if retry_after_header:
-        try:
-            return float(retry_after_header)
-        except Exception:
-            pass
-    return min(30, 1.0 * (2 ** (attempt - 1))) + random.random()
-
-async def _fetch_limited_text_v5(
-    client: "httpx.AsyncClient",
-    url: str,
-    timeout_s: float,
-    max_bytes: int,
-    range_bytes: int,
-) -> Tuple[Optional[int], Dict[str, str], str, bool, str, List[str]]:
-    headers = {"Range": f"bytes=0-{range_bytes-1}"}
-    try:
-        async with client.stream(
-            "GET",
-            url,
-            timeout=timeout_s,
-            follow_redirects=True,
-            headers=headers,
-        ) as r:
-            final_url = str(r.url)
-            history_urls = [str(resp.url) for resp in r.history]
-            redirect_chain = (
-                history_urls + [final_url]
-                if history_urls or final_url != url
-                else [final_url]
-            )
-            redirected = final_url != url or bool(history_urls)
-            status = r.status_code
-            h = {k.lower(): v for k, v in r.headers.items()}
-            buf = bytearray()
-            async for chunk in r.aiter_bytes():
-                if not chunk:
-                    continue
-                take = min(len(chunk), max_bytes - len(buf))
-                buf.extend(chunk[:take])
-                if len(buf) >= max_bytes:
-                    break
-            encoding = r.encoding or "utf-8"
-            try:
-                text = buf.decode(encoding, errors="replace")
-            except Exception:
-                text = buf.decode("utf-8", errors="replace")
-            return status, h, text, redirected, final_url, redirect_chain
-    except Exception as e:
-        return None, {}, f"{e.__class__.__name__}: {str(e)[:200]}", False, url, [url]
-
-def _classify_v5(
-    url: str,
-    status_code: Optional[int],
-    detail: str,
-    redirected: bool,
-) -> str:
-    if status_code is None:
-        return "ERROR"
-    if status_code in (404, 410):
-        return "ROTO"
-    if 500 <= status_code <= 599:
-        return "ERROR"
-    if 400 <= status_code <= 499:
-        return "ERROR"
-    return "REDIRECT" if redirected else "ACTIVO"
-
-async def _check_one_url_robust_v5(
-    client: "httpx.AsyncClient",
-    url: str,
-    timeout_s: float,
-    max_bytes: int,
-    range_bytes: int,
-    detect_soft_404: bool,
-    retries: int,
-) -> Dict[str, Any]:
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if _is_binary_candidate(url):
-        attempt = 0
-        while attempt <= max(0, retries):
-            attempt += 1
-            try:
-                r = await client.head(
-                    url,
-                    timeout=timeout_s,
-                    follow_redirects=True,
-                )
-                final_url = str(r.url)
-                history_urls = [str(resp.url) for resp in r.history]
-                redirect_chain = (
-                    history_urls + [final_url]
-                    if history_urls or final_url != url
-                    else [final_url]
-                )
-                redirected = final_url != url or bool(history_urls)
-                status = r.status_code
-                headers = {k.lower(): v for k, v in r.headers.items()}
-                ct = headers.get("content-type", "")
-                if status in (405, 501):
-                    break
-                if status in (408, 425, 429) or (500 <= status <= 599):
-                    delay = _compute_retry_delay(headers.get("retry-after"), attempt)
-                    if attempt <= retries:
-                        await asyncio.sleep(delay)
-                        continue
-                detail = "OK" if status < 400 else f"HTTP {status}"
-                return {
-                    "Link": url,
-                    "Status": _classify_v5(url, status, detail, redirected),
-                    "HTTP_Code": status,
-                    "Detalle": detail,
-                    "Content_Type": ct,
-                    "Redirected": "Sí" if redirected else "No",
-                    "Timestamp": now_str,
-                    "Final_URL": final_url,
-                    "Redirect_Chain": " -> ".join(redirect_chain),
-                    "Soft_404": "No",
-                    "Score": 100,
-                }
-            except Exception as e:
-                last_detail = f"{e.__class__.__name__}: {str(e)[:200]}"
-                if attempt <= retries:
-                    delay = _compute_retry_delay(None, attempt)
-                    await asyncio.sleep(delay)
-                    continue
-                return {
-                    "Link": url,
-                    "Status": "ERROR",
-                    "HTTP_Code": None,
-                    "Detalle": last_detail,
-                    "Content_Type": "",
-                    "Redirected": "No",
-                    "Timestamp": now_str,
-                    "Final_URL": url,
-                    "Redirect_Chain": url,
-                    "Soft_404": "No",
-                    "Score": -100,
-                }
-    attempt = 0
-    last_detail = ""
-    last_status: Optional[int] = None
-    last_redirected = False
-    last_ct = ""
-    last_final_url = url
-    last_chain: List[str] = [url]
-    soft_flag = False
-    content_score = 0
-    while attempt <= max(0, retries):
-        attempt += 1
-        status, headers, text, redirected, final_url, chain = await _fetch_limited_text_v5(
-            client,
-            url,
-            timeout_s=timeout_s,
-            max_bytes=max_bytes,
-            range_bytes=range_bytes,
-        )
-        last_status = status
-        last_redirected = redirected
-        last_final_url = final_url
-        last_chain = chain
-        last_ct = headers.get("content-type", "")
-        if status is None:
-            last_detail = text
-            if attempt <= retries:
-                delay = _compute_retry_delay(None, attempt)
-                await asyncio.sleep(delay)
-                continue
-            break
-        if status in (408, 425, 429) or (500 <= status <= 599):
-            last_detail = f"HTTP {status} (transitorio)"
-            if attempt <= retries:
-                delay = _compute_retry_delay(headers.get("retry-after"), attempt)
-                await asyncio.sleep(delay)
-                continue
-            break
-        if status >= 400:
-            last_detail = f"HTTP {status}"
-            break
-        detail = "OK"
-        if detect_soft_404 and _is_html_like(last_ct):
-            content_score = 0
-            if SOFT_404_RE.search(text[:8000]):
-                soft_flag = True
-                last_detail = "Soft-404 detectado"
-                return {
-                    "Link": url,
-                    "Status": "ROTO",
-                    "HTTP_Code": status,
-                    "Detalle": last_detail,
-                    "Content_Type": last_ct,
-                    "Redirected": "Sí" if redirected else "No",
-                    "Timestamp": now_str,
-                    "Final_URL": final_url,
-                    "Redirect_Chain": " -> ".join(chain),
-                    "Soft_404": "Sí",
-                    "Score": content_score,
-                }
-        return {
-            "Link": url,
-            "Status": _classify_v5(url, status, detail, redirected),
-            "HTTP_Code": status,
-            "Detalle": detail,
-            "Content_Type": last_ct,
-            "Redirected": "Sí" if redirected else "No",
-            "Timestamp": now_str,
-            "Final_URL": final_url,
-            "Redirect_Chain": " -> ".join(chain),
-            "Soft_404": "No",
-            "Score": content_score if content_score else 100,
-        }
-    return {
-        "Link": url,
-        "Status": _classify_v5(url, last_status, last_detail or "Error", last_redirected),
-        "HTTP_Code": last_status,
-        "Detalle": last_detail or "Error",
-        "Content_Type": last_ct,
-        "Redirected": "Sí" if last_redirected else "No",
-        "Timestamp": now_str,
-        "Final_URL": last_final_url,
-        "Redirect_Chain": " -> ".join(last_chain),
-        "Soft_404": "Sí" if soft_flag else "No",
-        "Score": content_score,
-    }
-
-async def _run_link_check_ultra_v5(
-    links_with_rows: List[Tuple[int, str]],
-    timeout_s: float,
-    concurrency_global: int,
-    concurrency_per_host: int,
-    detect_soft_404: bool,
-    retries: int,
-    verify_ssl: bool,
-    max_bytes: int,
-    range_bytes: int,
-    progress_callback,
-) -> List[Dict[str, Any]]:
-    sem_global = asyncio.Semaphore(max(1, int(concurrency_global)))
-    host_sems: Dict[str, asyncio.Semaphore] = {}
-    def get_host_sem(url: str) -> asyncio.Semaphore:
-        hk = _host_key(url)
-        if hk not in host_sems:
-            host_sems[hk] = asyncio.Semaphore(max(1, int(concurrency_per_host)))
-        return host_sems[hk]
-    limits = httpx.Limits(
-        max_connections=max(10, int(concurrency_global) + 10),
-        max_keepalive_connections=max(10, int(concurrency_global)),
-        keepalive_expiry=30.0,
-    )
-    timeout = httpx.Timeout(timeout_s)
-    base_headers = _build_headers_for_domain("https://example.com")
-    async with httpx.AsyncClient(
-        headers=base_headers,
-        limits=limits,
-        timeout=timeout,
-        http2=False,
-        verify=verify_ssl,
-        follow_redirects=True,
-    ) as client_ssl, httpx.AsyncClient(
-        headers=base_headers,
-        limits=limits,
-        timeout=timeout,
-        http2=False,
-        verify=False,
-        follow_redirects=True,
-    ) as client_nossl:
-        total = len(links_with_rows)
-        done = 0
-        results: List[Dict[str, Any]] = []
-        async def worker(fila_excel: int, u: str):
-            nonlocal done
-            host_sem = get_host_sem(u)
-            client = client_nossl if not verify_ssl else client_ssl
-            client.headers.update(_build_headers_for_domain(u))
-            async with sem_global:
-                async with host_sem:
-                    base = await _check_one_url_robust_v5(
-                        client,
-                        u,
-                        timeout_s=timeout_s,
-                        max_bytes=max_bytes,
-                        range_bytes=range_bytes,
-                        detect_soft_404=detect_soft_404,
-                        retries=retries,
-                    )
-            row = dict(base)
-            row["Fila_Excel"] = fila_excel
-            done += 1
-            progress_callback(done, total, u, row.get("Status", ""))
-            return row
-        tasks = [worker(fila, url) for (fila, url) in links_with_rows]
-        for coro in asyncio.as_completed(tasks):
-            results.append(await coro)
-        return results
-
-def run_async(coro):
-    try:
-        return asyncio.run(coro)
-    except RuntimeError as e:
-        msg = str(e)
-        if "asyncio.run() cannot be called from a running event loop" in msg:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(coro)
-        raise
-
-def _infer_tipo_problema(row: pd.Series) -> str:
-    status = str(row.get("Status", "") or "").upper()
-    code = row.get("HTTP_Code")
-    detalle = str(row.get("Detalle", "") or "")
-    soft_404_flag = str(row.get("Soft_404", "") or "").strip().lower() == "sí"
-    if status == "INVALIDO":
-        return "FORMATO_INVALIDO"
-    if status in ("ACTIVO", "REDIRECT"):
-        return "SIN_PROBLEMA"
-    if status == "ROTO":
-        if soft_404_flag or "soft-404" in detalle.lower():
-            return "SOFT_404"
-        if code in (404, 410):
-            return "ROTO_REAL"
-        return "ROTO_REAL"
-    if status == "ERROR":
-        if code in (401, 403, 429):
-            return "ACCESO_RESTRINGIDO"
-        if code is None:
-            return "ERROR_DESCONOCIDO"
-        try:
-            c_int = int(code)
-        except Exception:
-            return "ERROR_DESCONOCIDO"
-        if 500 <= c_int <= 599:
-            return "ERROR_SERVIDOR"
-        if 400 <= c_int <= 499:
-            return "ERROR_CLIENTE"
-        return "ERROR_DESCONOCIDO"
-    return ""
-
-def _standardize_status_column(df: pd.DataFrame) -> pd.DataFrame:
-    if "Status" not in df.columns:
-        return df
-    df = df.copy()
-    status_upper = df["Status"].astype(str).str.upper()
-    df.loc[status_upper.str.contains("REDIRECT"), "Status"] = "ACTIVO"
-    df.loc[
-        status_upper.str.contains("ERROR") | status_upper.str.contains("INVALIDO"),
-        "Status"
-    ] = "ROTO"
-    return df
 
 # ======================================================
 # PDF to Word Transform
@@ -2457,66 +2761,62 @@ def init_session_state():
         st.session_state["module"] = "Home"
     if "module_radio" not in st.session_state:
         st.session_state["module_radio"] = st.session_state["module"]
-    
-    # Broken Link Checker states
-    st.session_state.setdefault("output_dir", str(Path.cwd() / "SALIDA_LINK_CHECKER"))
-    st.session_state.setdefault("status_input_filename", None)
-    st.session_state.setdefault("status_input_df", None)
-    st.session_state.setdefault("status_links_list", None)
-    st.session_state.setdefault("status_cache", {})
-    st.session_state.setdefault("status_result_df", None)
-    st.session_state.setdefault("status_invalid_df", None)
-    st.session_state.setdefault("status_export_df", None)
-    
-    # Descarga Masiva states
+
+    # ======================
+    # Descarga masiva desde Excel
+    # ======================
     st.session_state.setdefault("descarga_zip_bytes", None)
     st.session_state.setdefault("descarga_resultados", None)
     st.session_state.setdefault("descarga_fallidos", None)
     st.session_state.setdefault("descarga_download_dir", None)
     st.session_state.setdefault("descarga_fallidos_csv", None)
-    
-    # PDF to Word states
+
+    # ======================
+    # PDF → Word / extracción de texto
+    # ======================
     st.session_state.setdefault("extraccion_zip_bytes", None)
     st.session_state.setdefault("extraccion_resultados", None)
     st.session_state.setdefault("extraccion_errores", None)
-    
-    # Pipeline states
+
+    # ======================
+    # Pipeline global (descarga → PDF → Word → GrammarScan)
+    # ======================
     st.session_state.setdefault("pipeline_pdf_signature", None)
     st.session_state.setdefault("pipeline_pdf_done", False)
     st.session_state.setdefault("pipeline_pdf_results", None)
     st.session_state.setdefault("pipeline_pdf_errors", None)
-    st.session_state.setdefault("pipeline_word_docs", None)
-    st.session_state.setdefault("pipeline_ppt_docs", None)
-    st.session_state.setdefault("pipeline_word_done", False)
-    st.session_state.setdefault("pipeline_df_links", None)
-    st.session_state.setdefault("pipeline_word_errors", None)
-    st.session_state.setdefault("pipeline_word_inputs_count", 0)
-    st.session_state.setdefault("pipeline_ppt_inputs_count", 0)
-    st.session_state.setdefault("pipeline_status_done", False)
-    st.session_state.setdefault("pipeline_reset_token", 0)
+
     st.session_state.setdefault("pipeline_docx_paths", [])
     st.session_state.setdefault("pipeline_docx_meta", {})
     st.session_state.setdefault("pipeline_pptx_paths", [])
     st.session_state.setdefault("pipeline_pptx_meta", {})
-    
-    # Bulk download states
+    st.session_state.setdefault("pipeline_word_inputs_count", 0)
+    st.session_state.setdefault("pipeline_ppt_inputs_count", 0)
+
+    st.session_state.setdefault("pipeline_reset_token", 0)
+
+    # ======================
+    # Bulk download desde Excel
+    # ======================
     st.session_state.setdefault("bulk_has_valid_urls", False)
     st.session_state.setdefault("bulk_urls_archivos", None)
     st.session_state.setdefault("bulk_excel_df", None)
     st.session_state.setdefault("bulk_url_mapping", None)
     st.session_state.setdefault("pipeline_bulk_signature", None)
     st.session_state.setdefault("pipeline_bulk_done", False)
-    
-    # Manual upload dir
+
+    # Directorio temporal para archivos subidos manualmente
     st.session_state.setdefault("pipeline_manual_dir", None)
-    
-    # GrammarScan states
+
+    # ======================
+    # GrammarScan
+    # ======================
     st.session_state.setdefault("gs_uploader_key", 0)
     st.session_state.setdefault("gs_lang", "es")
     st.session_state.setdefault("gs_max_chars", 30000)
     st.session_state.setdefault("gs_workers", 4)
     st.session_state.setdefault("gs_excluir_biblio", True)
-    st.session_state.setdefault("gs_modismos", True)
+    st.session_state.setdefault("gs_modismos", False)
     st.session_state.setdefault("gs_final_df", None)
     st.session_state.setdefault("gs_resumen_completo_df", None)
     st.session_state.setdefault("gs_metrics", None)
@@ -2527,24 +2827,56 @@ def init_session_state():
     st.session_state.setdefault("gs_excel_autotrigger_done", False)
 
 def reset_report_broken_pipeline():
+    """
+    Resetea el pipeline de:
+    - Descarga masiva desde Excel
+    - Procesamiento PDF → Word
+    - Rutas de documentos para GrammarScan
+
+    El estado propio de GrammarScan se limpia aparte en `reset_grammarscan_state()`.
+    """
     keys_to_clear = [
-        "pipeline_bulk_signature", "pipeline_bulk_done", "bulk_has_valid_urls",
-        "bulk_urls_archivos", "descarga_resultados", "descarga_fallidos",
-        "descarga_zip_bytes", "descarga_download_dir", "descarga_fallidos_csv",
-        "pipeline_pdf_signature", "pipeline_pdf_done", "pipeline_pdf_results",
-        "pipeline_pdf_errors", "extraccion_resultados", "extraccion_errores",
-        "extraccion_zip_bytes", "extr_usar_multihilo", "extr_max_workers",
-        "pipeline_word_docs", "pipeline_ppt_docs", "pipeline_word_done",
-        "pipeline_df_links", "pipeline_word_errors", "reporte_links_df",
-        "pipeline_word_inputs_count", "pipeline_ppt_inputs_count",
-        "pipeline_docx_paths", "pipeline_docx_meta", "pipeline_pptx_paths",
-        "pipeline_pptx_meta", "pipeline_status_done", "status_input_filename",
-        "status_input_df", "status_links_list", "status_cache", "status_result_df",
-        "status_invalid_df", "status_export_df", "bulk_excel_df", "bulk_url_mapping",
-        "pipeline_manual_dir"
+        # Descarga masiva desde Excel
+        "pipeline_bulk_signature",
+        "pipeline_bulk_done",
+        "bulk_has_valid_urls",
+        "bulk_urls_archivos",
+        "bulk_excel_df",
+        "bulk_url_mapping",
+
+        # Resultados de descarga
+        "descarga_zip_bytes",
+        "descarga_resultados",
+        "descarga_fallidos",
+        "descarga_download_dir",
+        "descarga_fallidos_csv",
+
+        # Procesamiento PDF → Word
+        "pipeline_pdf_signature",
+        "pipeline_pdf_done",
+        "pipeline_pdf_results",
+        "pipeline_pdf_errors",
+        "extraccion_resultados",
+        "extraccion_errores",
+        "extraccion_zip_bytes",
+        "extr_usar_multihilo",
+        "extr_max_workers",
+
+        # Rutas de documentos ya normalizados (para GrammarScan)
+        "pipeline_docx_paths",
+        "pipeline_docx_meta",
+        "pipeline_pptx_paths",
+        "pipeline_pptx_meta",
+        "pipeline_word_inputs_count",
+        "pipeline_ppt_inputs_count",
+
+        # Directorio temporal de subidas manuales
+        "pipeline_manual_dir",
     ]
+
     for k in keys_to_clear:
         st.session_state.pop(k, None)
+
     st.session_state["pipeline_reset_token"] = st.session_state.get("pipeline_reset_token", 0) + 1
 
 def reset_grammarscan_state():
@@ -2742,6 +3074,9 @@ def process_grammarscan_files(
     else:
         final_df = pd.DataFrame([])
 
+    # 🔹 NUEVO: limpiar filas sin Sugerencias u Oración (vacías o "0")
+    final_df = _filter_resultados_empty_suggest_or_sentence(final_df)
+
     elapsed = time.time() - t0
     metrics = {
         "total": total_seleccionados,
@@ -2750,6 +3085,7 @@ def process_grammarscan_files(
         "n_err": n_err,
     }
     return final_df, resumen_completo_df, metrics, elapsed
+
 
 # ======================================================
 # PÁGINAS / MÓDULOS
@@ -2760,11 +3096,12 @@ def page_home():
     render_hero(
         title=APP_TITLE,
         subtitle=(
-            "Revisión automatizada y validación inteligente de enlaces contenidos "
+            "Revisión automatizada y validación inteligente de ortografía y gramática "
             "en documentos académicos y administrativos."
         ),
-        icon="🔗",
+        icon="📚",
     )
+
 
     # Card principal de contenido
     ui_card_open()
@@ -2977,6 +3314,34 @@ def render_report_grammarscan():
     #     (\u200B), lo que fuerza a Streamlit a recrear el expander
     #     completamente colapsado, sin usar key.
     # ------------------------------------------------------------------
+
+        # ------------------------------------------------------------------
+    # NUEVA VENTANA: Filtrar bibliografía y modismos Arg.
+    #   - Colapsada por defecto
+    #   - Solo "Excluir bibliografía" viene activado por defecto
+    # ------------------------------------------------------------------
+    with st.expander("Filtrar bibliografia y modismos Arg.", expanded=False):
+        st.markdown(
+            "Configura qué contenido quieres excluir o analizar antes de iniciar el flujo.",
+            unsafe_allow_html=False,
+        )
+
+        col_bib, col_mod = st.columns(2)
+
+        with col_bib:
+            st.checkbox(
+                "Excluir secciones/entradas de bibliografía (APA, MLA, IEEE, Vancouver)",
+                key="gs_excluir_biblio",
+                value=st.session_state.get("gs_excluir_biblio", True),
+            )
+
+        with col_mod:
+            st.checkbox(
+                "Detectar modismos argentinos (modismos_ar.xlsx)",
+                key="gs_modismos",
+                value=st.session_state.get("gs_modismos", False),
+            )
+
     exp_base_label = "Descarga masiva de documentos (PDF, Word, PPT)"
     reset_counter = st.session_state.get("pipeline_reset_token", 0)
     exp_label_internal = exp_base_label + ("\u200B" * reset_counter)
@@ -3553,7 +3918,6 @@ def render_report_grammarscan():
                     "No hay PDFs pendientes; se continuará con Word/PPTX.",
                 )
 
-            # ... (resto del código que construye combined_docx_paths, etc.)
 
             
             # 2) DOCX generados desde PDFs + DOCX originales (rutas)
@@ -3640,29 +4004,18 @@ def render_report_grammarscan():
         with c2:
             max_chars_call = st.number_input(
                 "Máx. caracteres por llamada (LOCAL)",
-                5000, 80000, 30000,
+                3000, 40000, 10000,  # ⬅️ rango y valor por defecto más conservadores
                 help="Se agrupan páginas/diapos hasta este límite para mantener contexto.",
                 key="gs_max_chars",
             )
         with c3:
             workers = st.slider(
                 "Trabajadores (hilos)",
-                1, max(2, os.cpu_count() or 4), min(4, (os.cpu_count() or 4)),
+                1, max(2, os.cpu_count() or 4),
+                min(2, (os.cpu_count() or 4)),  # ⬅️ por defecto 2
                 help="Paraleliza el troceo por páginas. Las llamadas a LT se serializan para estabilidad.",
                 key="gs_workers",
             )
-    
-    excluir_biblio = st.checkbox(
-        "Excluir secciones/entradas de bibliografía (APA, MLA, IEEE, Vancouver)",
-        value=True,
-        key="gs_excluir_biblio",
-    )
-    
-    analizar_modismos = st.checkbox(
-        "Detectar modismos argentinos (modismos_ar.xlsx)",
-        value=True if st.session_state.get("gs_lang", "es").startswith("es") else False,
-        key="gs_modismos",
-    )
     
     with st.expander("Estado del motor", expanded=False):
         st.write(f"Java detectado: **{find_java()}**")
@@ -3760,13 +4113,24 @@ def render_report_grammarscan():
     metrics = st.session_state.get("gs_metrics")
     elapsed = st.session_state.get("gs_elapsed", 0.0)
     
-    # Procesamiento automático cuando hay archivos
     if have_files:
-        signature = build_files_signature(all_uploaded_files)
+        # Firma de archivos
+        files_sig = build_files_signature(all_uploaded_files)
+
+        # Firma de parámetros de análisis (para forzar reproceso cuando cambian)
+        param_sig = (
+            st.session_state.get("gs_lang", "es"),
+            st.session_state.get("gs_max_chars", 30000),
+            st.session_state.get("gs_workers", 4),
+            st.session_state.get("gs_excluir_biblio", True),
+            st.session_state.get("gs_modismos", False),
+        )
+
+        signature = (files_sig, param_sig)
         last_signature = st.session_state.get("gs_last_files_signature")
-        
+
         need_processing = (final_df is None) or (signature != last_signature)
-        
+
         if need_processing:
             final_df, resumen_completo_df, metrics, elapsed = process_grammarscan_files(
                 ups=all_uploaded_files,
@@ -3774,16 +4138,14 @@ def render_report_grammarscan():
                 max_chars_call=st.session_state.get("gs_max_chars", 30000),
                 workers=st.session_state.get("gs_workers", 4),
                 excluir_biblio=st.session_state.get("gs_excluir_biblio", True),
-                analizar_modismos=st.session_state.get("gs_modismos", True),
+                analizar_modismos=st.session_state.get("gs_modismos", False),
             )
             st.session_state["gs_final_df"] = final_df
             st.session_state["gs_resumen_completo_df"] = resumen_completo_df
             st.session_state["gs_metrics"] = metrics
             st.session_state["gs_elapsed"] = elapsed
             st.session_state["gs_last_files_signature"] = signature
-    else:
-        st.session_state["gs_last_files_signature"] = None
-    
+
     # Paso 7: Procesar documentos (automático) + resultados
     ui_card_open()
     render_simple_step_header("7", "Procesar documentos (análisis automático)")
@@ -3916,6 +4278,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
