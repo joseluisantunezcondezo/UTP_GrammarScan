@@ -2101,16 +2101,26 @@ def _enrich_grammarscan_with_name_linkclass(final_df: pd.DataFrame) -> pd.DataFr
 def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFrame) -> bytes:
     # 🔹 OPCIONAL: asegurar limpieza antes de exportar
     resultados_df = _filter_resultados_empty_suggest_or_sentence(resultados_df)
-    
+
     # Sanitizar dataframes de entrada para evitar caracteres ilegales en XML
     resultados_df = _sanitize_excel_df(resultados_df)
     resumen_completo_df = _sanitize_excel_df(resumen_completo_df)
+
+    # 🔹 Recalcular totales finales de incidencias por archivo
+    if resultados_df is not None and not resultados_df.empty and "Archivo" in resultados_df.columns:
+        counts_by_archivo = (
+            resultados_df.groupby("Archivo")
+            .size()
+            .rename("TotalIncidencias")
+        )
+    else:
+        counts_by_archivo = pd.Series(name="TotalIncidencias", dtype="int64")
 
     out = BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as w:
 
         # =====================================================
-        # Hoja 1: Resultados
+        # Hoja 1: Resultados (detalle de incidencias)
         # =====================================================
         desired_cols = [
             "name",
@@ -2131,7 +2141,7 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
         else:
             tmp = resultados_df.copy()
 
-            # 🔴 NUEVO: eliminar la columna "Origen" del reporte final
+            # Eliminar la columna "Origen" del reporte final (si existe)
             if "Origen" in tmp.columns:
                 tmp = tmp.drop(columns=["Origen"])
 
@@ -2168,44 +2178,42 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
 
         # =====================================================
         # Hoja 2: ResumenIncidencias
-        # (ya con Es_mayor_100_paginas y TotalIncidencias=0 para >100 págs)
+        # (coherente con la hoja Resultados)
         # =====================================================
         if resumen_completo_df is None or resumen_completo_df.empty:
-            if resultados_df is None or resultados_df.empty:
+            # No hay resumen previo → lo construimos solo a partir de Resultados
+            if counts_by_archivo.empty:
                 resumen_inc = pd.DataFrame(
                     columns=["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]
                 )
             else:
-                tmp_group = (
-                    resultados_df.groupby("Archivo")
-                    .size()
-                    .reset_index(name="TotalIncidencias")
+                resumen_inc = (
+                    counts_by_archivo
+                    .reset_index()
                     .sort_values("TotalIncidencias", ascending=False)
                 )
-                tmp_group["Es_mayor_100_paginas"] = "NO"
-                resumen_inc = tmp_group[
+                resumen_inc["Es_mayor_100_paginas"] = "NO"
+                resumen_inc = resumen_inc[
                     ["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]
                 ]
         else:
+            # Partimos del resumen completo ya construido
             resumen_tmp = resumen_completo_df.copy()
 
             # Aseguramos columna Es_mayor_100_paginas
             if "Es_mayor_100_paginas" not in resumen_tmp.columns:
                 resumen_tmp["Es_mayor_100_paginas"] = "NO"
 
-            # Aseguramos columna TotalIncidencias
-            if "TotalIncidencias" not in resumen_tmp.columns:
-                if resultados_df is not None and not resultados_df.empty:
-                    counts = (
-                        resultados_df.groupby("Archivo")
-                        .size()
-                        .rename("TotalIncidencias")
-                    )
-                    resumen_tmp = resumen_tmp.merge(
-                        counts, on="Archivo", how="left"
-                    )
-                else:
-                    resumen_tmp["TotalIncidencias"] = 0
+            # Recalcular SIEMPRE TotalIncidencias desde resultados_df filtrado
+            if "TotalIncidencias" in resumen_tmp.columns:
+                resumen_tmp = resumen_tmp.drop(columns=["TotalIncidencias"])
+
+            if not counts_by_archivo.empty:
+                resumen_tmp = resumen_tmp.merge(
+                    counts_by_archivo, on="Archivo", how="left"
+                )
+            else:
+                resumen_tmp["TotalIncidencias"] = 0
 
             # Normalizar valores
             resumen_tmp["Es_mayor_100_paginas"] = (
@@ -2222,12 +2230,17 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
             mask_big = resumen_tmp["Es_mayor_100_paginas"].eq("SI")
             resumen_tmp.loc[mask_big, "TotalIncidencias"] = 0
 
+            # DataFrame final para la hoja ResumenIncidencias
             resumen_inc = resumen_tmp[
                 ["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]
             ].copy()
             resumen_inc = resumen_inc.sort_values(
                 "TotalIncidencias", ascending=False, kind="mergesort"
             )
+
+            # Muy importante: sincronizar también resumen_completo_df
+            # con los totales recalculados antes de exportar la hoja ResumenCompleto.
+            resumen_completo_df = resumen_tmp
 
         resumen_inc = _sanitize_excel_df(resumen_inc)
         resumen_inc.to_excel(w, index=False, sheet_name="ResumenIncidencias")
@@ -2237,7 +2250,8 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
         ws2.set_column(2, 2, 22)  # TotalIncidencias
 
         # =====================================================
-        # Hoja 3: ResumenCompleto (tal como lo tienes ahora)
+        # Hoja 3: ResumenCompleto
+        # (con TotalIncidencias ya recalculado y coherente)
         # =====================================================
         if resumen_completo_df is None:
             resumen_completo_df = pd.DataFrame([])
@@ -2267,6 +2281,7 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
 
     out.seek(0)
     return out.getvalue()
+
 
 # ======================================================
 # UTILIDADES DE RED (para descarga masiva)
@@ -4648,6 +4663,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
