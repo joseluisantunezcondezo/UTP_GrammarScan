@@ -1870,7 +1870,6 @@ def _sanitize_excel_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
 
     return df.applymap(_clean_value)
 
-
 # 🔹 NUEVO: helper para detectar celdas vacías o "0"
 def _is_empty_or_zero_cell(v: Any) -> bool:
     """
@@ -2099,7 +2098,6 @@ def _enrich_grammarscan_with_name_linkclass(final_df: pd.DataFrame) -> pd.DataFr
 
     return df_out
 
-
 def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFrame) -> bytes:
     # 🔹 OPCIONAL: asegurar limpieza antes de exportar
     resultados_df = _filter_resultados_empty_suggest_or_sentence(resultados_df)
@@ -2111,8 +2109,9 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
     out = BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as w:
 
+        # =====================================================
         # Hoja 1: Resultados
-        # -----------------------------
+        # =====================================================
         desired_cols = [
             "name",
             "Archivo",
@@ -2131,6 +2130,10 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
             tmp = pd.DataFrame(columns=desired_cols)
         else:
             tmp = resultados_df.copy()
+
+            # 🔴 NUEVO: eliminar la columna "Origen" del reporte final
+            if "Origen" in tmp.columns:
+                tmp = tmp.drop(columns=["Origen"])
 
             # Aseguramos las columnas clave aunque no existan todavía
             for col in ("name", "link_class"):
@@ -2163,26 +2166,26 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
                 width = 22
             ws.set_column(i, i, width)
 
-
-         # -----------------------------
+        # =====================================================
         # Hoja 2: ResumenIncidencias
-        # -----------------------------
-        # 👉 NUEVA LÓGICA:
-        #    - Usar resumen_completo_df como fuente principal
-        #    - Añadir columna Es_mayor_100_paginas (SI/NO)
-        #    - Forzar TotalIncidencias = 0 cuando Es_mayor_100_paginas == "SI"
+        # (ya con Es_mayor_100_paginas y TotalIncidencias=0 para >100 págs)
+        # =====================================================
         if resumen_completo_df is None or resumen_completo_df.empty:
             if resultados_df is None or resultados_df.empty:
-                resumen_inc = pd.DataFrame(columns=["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"])
+                resumen_inc = pd.DataFrame(
+                    columns=["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]
+                )
             else:
-                tmp = (
+                tmp_group = (
                     resultados_df.groupby("Archivo")
                     .size()
                     .reset_index(name="TotalIncidencias")
                     .sort_values("TotalIncidencias", ascending=False)
                 )
-                tmp["Es_mayor_100_paginas"] = "NO"
-                resumen_inc = tmp[["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]]
+                tmp_group["Es_mayor_100_paginas"] = "NO"
+                resumen_inc = tmp_group[
+                    ["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]
+                ]
         else:
             resumen_tmp = resumen_completo_df.copy()
 
@@ -2193,21 +2196,38 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
             # Aseguramos columna TotalIncidencias
             if "TotalIncidencias" not in resumen_tmp.columns:
                 if resultados_df is not None and not resultados_df.empty:
-                    counts = resultados_df.groupby("Archivo").size().rename("TotalIncidencias")
-                    resumen_tmp = resumen_tmp.merge(counts, on="Archivo", how="left")
+                    counts = (
+                        resultados_df.groupby("Archivo")
+                        .size()
+                        .rename("TotalIncidencias")
+                    )
+                    resumen_tmp = resumen_tmp.merge(
+                        counts, on="Archivo", how="left"
+                    )
                 else:
                     resumen_tmp["TotalIncidencias"] = 0
 
             # Normalizar valores
-            resumen_tmp["Es_mayor_100_paginas"] = resumen_tmp["Es_mayor_100_paginas"].fillna("").astype(str).str.upper()
-            resumen_tmp["TotalIncidencias"] = resumen_tmp["TotalIncidencias"].fillna(0).astype(int)
+            resumen_tmp["Es_mayor_100_paginas"] = (
+                resumen_tmp["Es_mayor_100_paginas"]
+                .fillna("")
+                .astype(str)
+                .str.upper()
+            )
+            resumen_tmp["TotalIncidencias"] = (
+                resumen_tmp["TotalIncidencias"].fillna(0).astype(int)
+            )
 
             # Forzar 0 incidencias en los que son > 100 páginas
             mask_big = resumen_tmp["Es_mayor_100_paginas"].eq("SI")
             resumen_tmp.loc[mask_big, "TotalIncidencias"] = 0
 
-            resumen_inc = resumen_tmp[["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]].copy()
-            resumen_inc = resumen_inc.sort_values("TotalIncidencias", ascending=False, kind="mergesort")
+            resumen_inc = resumen_tmp[
+                ["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]
+            ].copy()
+            resumen_inc = resumen_inc.sort_values(
+                "TotalIncidencias", ascending=False, kind="mergesort"
+            )
 
         resumen_inc = _sanitize_excel_df(resumen_inc)
         resumen_inc.to_excel(w, index=False, sheet_name="ResumenIncidencias")
@@ -2216,22 +2236,35 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
         ws2.set_column(1, 1, 18)  # Es_mayor_100_paginas
         ws2.set_column(2, 2, 22)  # TotalIncidencias
 
-        # -----------------------------
-        # Hoja 3: ResumenCompleto
-        # -----------------------------
+        # =====================================================
+        # Hoja 3: ResumenCompleto (tal como lo tienes ahora)
+        # =====================================================
         if resumen_completo_df is None:
-            resumen_completo_df = pd.DataFrame()
+            resumen_completo_df = pd.DataFrame([])
 
         resumen_completo_df = _sanitize_excel_df(resumen_completo_df)
-        if resumen_completo_df is None:
-            resumen_completo_df = pd.DataFrame()
-
         resumen_completo_df.to_excel(w, index=False, sheet_name="ResumenCompleto")
         ws3 = w.sheets["ResumenCompleto"]
-        for i, col in enumerate(resumen_completo_df.columns):
-            ws3.set_column(i, i, 28 if i > 0 else 50)
 
-    # ⚠️ Importante: después del with YA NO se vuelve a escribir nada en `w`
+        for i, col in enumerate(resumen_completo_df.columns):
+            try:
+                width = min(
+                    60,
+                    max(
+                        12,
+                        int(
+                            resumen_completo_df[col]
+                            .astype(str)
+                            .str.len()
+                            .quantile(0.9)
+                        )
+                        + 2,
+                    ),
+                )
+            except Exception:
+                width = 22
+            ws3.set_column(i, i, width)
+
     out.seek(0)
     return out.getvalue()
 
@@ -3023,7 +3056,6 @@ def render_task_progress(
     </div>
     """
     placeholder.markdown(html, unsafe_allow_html=True)
-
 
 # ======================================================
 # ESTADO DE SESIÓN
@@ -4616,6 +4648,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
