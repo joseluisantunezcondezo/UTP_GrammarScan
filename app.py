@@ -1800,31 +1800,6 @@ def _sanitize_excel_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
 
     return df.applymap(_clean_value)
 
-# Patrones para limpiar caracteres no válidos en XML/Excel
-INVALID_XML_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
-
-def _sanitize_excel_df(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """
-    Elimina de un DataFrame los caracteres de control no permitidos por
-    el formato XLSX (XML 1.0) para evitar que Excel muestre errores
-    de reparación al abrir el archivo.
-    """
-    if df is None or df.empty:
-        return df
-
-    df = df.copy()
-
-    # Limpiar nombres de columnas
-    df.columns = [INVALID_XML_RE.sub("", str(c)) for c in df.columns]
-
-    # Limpiar el contenido de las celdas de tipo string
-    def _clean_value(v: Any) -> Any:
-        if isinstance(v, str):
-            return INVALID_XML_RE.sub("", v)
-        return v
-
-    return df.applymap(_clean_value)
-
 
 # 🔹 NUEVO: helper para detectar celdas vacías o "0"
 def _is_empty_or_zero_cell(v: Any) -> bool:
@@ -4278,6 +4253,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
