@@ -7,6 +7,7 @@ import shutil
 import threading
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 from xml.etree import ElementTree as ET
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -146,6 +147,38 @@ def safe_str(x) -> str:
         return str(x)
     except Exception:
         return ""
+
+def _normalize_url_for_join(value: Any) -> str:
+    """
+    Normaliza URLs para usarlas en joins:
+    - Quita espacios en blanco alrededor
+    - Normaliza scheme y dominio a minúsculas
+    - Elimina barra final redundante
+    """
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s:
+        return ""
+
+    try:
+        p = urlparse(s)
+        return urlunparse(
+            (
+                (p.scheme or "").lower(),
+                (p.netloc or "").lower(),
+                (p.path or "").rstrip("/"),
+                p.params,
+                p.query,
+                p.fragment,
+            )
+        )
+    except Exception:
+        # Si algo falla, al menos quitamos espacios y barra final
+        return s.rstrip("/")
+
+
+
 
 ACCENTED_VOWELS = "áéíóúÁÉÍÓÚ"
 
@@ -1147,6 +1180,43 @@ def extract_pages(file_bytes: bytes, file_name: str) -> Tuple[List[Tuple[int, st
         return read_txt_pages(bio), "Página"
 
     return [], "Página"
+
+def _count_logical_pages_for_grammar(ext: str, file_bytes: bytes, display_name: str) -> Optional[int]:
+    """
+    Devuelve el número de 'páginas lógicas' del documento para fines de GrammarScan:
+
+    - PDF   -> número de páginas reales (pdfplumber)
+    - DOCX  -> número de bloques que extrae extract_pages (usa saltos de página)
+    - PPTX  -> número de diapositivas
+    - TXT   -> número de 'páginas' según LINES_PER_TXT_PAGE
+
+    Para el filtro de > 100 páginas solo se usa en PDF / DOCX / PPTX.
+    """
+    try:
+        ext = (ext or "").lower()
+
+        # Caso PDF: contamos páginas sin extraer todo el texto, para que sea rápido en PDFs enormes
+        if ext == ".pdf":
+            try:
+                bio = BytesIO(file_bytes)
+                with pdfplumber.open(bio) as pdf:
+                    return len(pdf.pages)
+            except Exception:
+                # Fallback por si algo raro pasa: usamos extract_pages
+                pages, _ = extract_pages(file_bytes, display_name)
+                return len(pages) if pages else 0
+
+        # Para DOCX, PPTX, TXT reutilizamos extract_pages (totalmente coherente con el análisis)
+        if ext in (".docx", ".pptx", ".txt"):
+            pages, _ = extract_pages(file_bytes, display_name)
+            return len(pages) if pages else 0
+
+        return None
+    except Exception as e:
+        logger.warning(f"No se pudo contar páginas para {display_name}: {e}")
+        return None
+
+
 def build_global_text(
     pages: List[Tuple[int, str]]
 ) -> Tuple[str, List[int], List[Tuple[int, int, int]]]:
@@ -1862,6 +1932,174 @@ def _filter_resultados_empty_suggest_or_sentence(
     return df
 
 
+def _enrich_grammarscan_with_name_linkclass(final_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enriquece el DataFrame de resultados de GrammarScan con:
+
+    - Columna 'name' y 'link_class' provenientes del Excel de URLs (si existe)
+    - Columna 'source_url' derivada de la metadata del pipeline (si existe)
+    - Relleno de 'name' para archivos subidos manualmente y ZIP
+    """
+    if final_df is None:
+        return pd.DataFrame()
+
+    if final_df.empty:
+        # Aseguramos columnas aunque no haya filas
+        for col in ("name", "link_class"):
+            if col not in final_df.columns:
+                final_df[col] = ""
+        return final_df
+
+    df_out = final_df.copy()
+
+    # ------------------------------------------------------------------
+    # 1) Recuperar 'source_url' a partir de la metadata del pipeline
+    # ------------------------------------------------------------------
+    try:
+        meta_docx = st.session_state.get("pipeline_docx_meta", {}) or {}
+        meta_pptx = st.session_state.get("pipeline_pptx_meta", {}) or {}
+    except Exception:
+        meta_docx = {}
+        meta_pptx = {}
+
+    meta_rows: List[Dict[str, Any]] = []
+
+    for meta_dict in (meta_docx, meta_pptx):
+        for _path, meta in meta_dict.items():
+            display_name = str(meta.get("display_name") or "").strip()
+            if not display_name:
+                continue
+            row: Dict[str, Any] = {"Archivo": display_name}
+            src = meta.get("source_url")
+            if src is not None:
+                row["source_url"] = src
+            origin = meta.get("origin")
+            if origin is not None:
+                row["Origen"] = origin
+            meta_rows.append(row)
+
+    if meta_rows:
+        meta_df = pd.DataFrame(meta_rows).drop_duplicates(subset=["Archivo"])
+        df_out = df_out.merge(
+            meta_df,
+            on="Archivo",
+            how="left",
+            suffixes=("", "_meta"),
+        )
+
+        # Unificar columna source_url si ha quedado source_url_meta
+        if "source_url_meta" in df_out.columns:
+            if "source_url" not in df_out.columns:
+                df_out["source_url"] = df_out["source_url_meta"]
+            else:
+                mask_fill = df_out["source_url"].isna() | df_out["source_url"].astype(str).str.strip().isin(["", "nan", "None"])
+                df_out.loc[mask_fill, "source_url"] = df_out.loc[mask_fill, "source_url_meta"]
+            df_out = df_out.drop(columns=["source_url_meta"])
+
+        # Igual para Origen (opcional)
+        if "Origen_meta" in df_out.columns:
+            if "Origen" not in df_out.columns:
+                df_out["Origen"] = df_out["Origen_meta"]
+            else:
+                mask_fill = df_out["Origen"].isna() | df_out["Origen"].astype(str).str.strip().isin(["", "nan", "None"])
+                df_out.loc[mask_fill, "Origen"] = df_out.loc[mask_fill, "Origen_meta"]
+            df_out = df_out.drop(columns=["Origen_meta"])
+
+    # ------------------------------------------------------------------
+    # 2) Garantizar columnas name / link_class
+    # ------------------------------------------------------------------
+    for col in ("name", "link_class"):
+        if col not in df_out.columns:
+            df_out[col] = ""
+
+    # ------------------------------------------------------------------
+    # 3) Enriquecer con name / link_class desde el Excel de URLs
+    # ------------------------------------------------------------------
+    bulk_map = st.session_state.get("bulk_url_mapping")
+    if isinstance(bulk_map, pd.DataFrame) and not bulk_map.empty and "source_url" in df_out.columns:
+        cols_to_add: List[str] = []
+        if "name" in bulk_map.columns:
+            cols_to_add.append("name")
+        if "link_class" in bulk_map.columns:
+            cols_to_add.append("link_class")
+
+        if cols_to_add:
+            df_out["source_url_norm"] = df_out["source_url"].map(_normalize_url_for_join)
+
+            df_out = df_out.merge(
+                bulk_map[["url_norm"] + cols_to_add],
+                left_on="source_url_norm",
+                right_on="url_norm",
+                how="left",
+                suffixes=("", "_from_bulk"),
+            )
+
+            for col in cols_to_add:
+                col_bulk = f"{col}_from_bulk"
+                if col_bulk in df_out.columns:
+                    mask_fill = df_out[col].isna() | df_out[col].astype(str).str.strip().isin(["", "nan", "None"])
+                    df_out.loc[mask_fill, col] = df_out.loc[mask_fill, col_bulk]
+                    df_out = df_out.drop(columns=[col_bulk])
+                else:
+                    if col not in df_out.columns:
+                        df_out[col] = ""
+
+            if "url_norm" in df_out.columns:
+                df_out = df_out.drop(columns=["url_norm"])
+            if "source_url_norm" in df_out.columns:
+                df_out = df_out.drop(columns=["source_url_norm"])
+
+    # ------------------------------------------------------------------
+    # 4) Completar 'name' para archivos subidos manualmente (sin URL)
+    # ------------------------------------------------------------------
+    if "source_url" in df_out.columns:
+        src_raw = df_out["source_url"]
+        mask_src_notna = src_raw.notna()
+        src_str = src_raw.astype(str).where(mask_src_notna, "")
+
+        name_raw = df_out["name"]
+        mask_name_empty = name_raw.isna() | name_raw.astype(str).str.strip().isin(["", "nan", "None"])
+
+        # Archivos locales: source_url no contiene '://'
+        mask_manual_file = (
+            mask_src_notna
+            & src_str.str.strip().ne("")
+            & ~src_str.str.contains("://", regex=False)
+            & mask_name_empty
+        )
+
+        if mask_manual_file.any():
+            df_out.loc[mask_manual_file, "name"] = src_str[mask_manual_file].apply(
+                lambda s: Path(s).name
+            )
+
+        # ------------------------------------------------------------------
+        # 5) Caso especial: ZIP subidos en el paso 4/6 (no tienen source_url)
+        #    Aquí usamos el patrón Archivo = "NombreZip/ArchivoInterno"
+        # ------------------------------------------------------------------
+        if "Archivo" in df_out.columns:
+            archivo_str = df_out["Archivo"].astype(str)
+            mask_zip_pattern = archivo_str.str.contains("/", regex=False)
+
+            mask_source_missing = df_out["source_url"].isna() | df_out["source_url"].astype(str).str.strip().isin(["", "nan", "None"])
+            mask_name_still_empty = df_out["name"].astype(str).str.strip().isin(["", "nan", "None"])
+
+            mask_zip_manual = mask_zip_pattern & mask_source_missing & mask_name_still_empty
+
+            if mask_zip_manual.any():
+                def _zip_from_archivo(val: str) -> str:
+                    base = str(val).split("/", 1)[0].strip()
+                    if not base:
+                        return ""
+                    if base.lower().endswith(".zip"):
+                        return base
+                    return f"{base}.zip"
+
+                df_out.loc[mask_zip_manual, "name"] = archivo_str[mask_zip_manual].map(_zip_from_archivo)
+
+    return df_out
+
+
 def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFrame) -> bytes:
     # 🔹 OPCIONAL: asegurar limpieza antes de exportar
     resultados_df = _filter_resultados_empty_suggest_or_sentence(resultados_df)
@@ -1872,52 +2110,111 @@ def to_excel_bytes(resultados_df: pd.DataFrame, resumen_completo_df: pd.DataFram
 
     out = BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as w:
-        # -----------------------------
+
         # Hoja 1: Resultados
         # -----------------------------
-        if resultados_df is None or resultados_df.empty:
-            tmp = pd.DataFrame(columns=[
-                "Archivo", "Página/Diapositiva", "BloqueTipo", "Mensaje",
-                "Sugerencias", "Oración", "Contexto", "Regla", "Categoría"
-            ])
-            tmp = _sanitize_excel_df(tmp)
-            tmp.to_excel(w, index=False, sheet_name="Resultados")
-            ws = w.sheets["Resultados"]
-            ws.set_column(0, 0, 40)
-        else:
-            resultados_df.to_excel(w, index=False, sheet_name="Resultados")
-            ws = w.sheets["Resultados"]
-            for i, col in enumerate(resultados_df.columns):
-                try:
-                    width = min(
-                        60,
-                        max(
-                            12,
-                            int(resultados_df[col].astype(str).str.len().quantile(0.9)) + 2
-                        )
-                    )
-                except Exception:
-                    width = 22
-                ws.set_column(i, i, width)
+        desired_cols = [
+            "name",
+            "Archivo",
+            "Página/Diapositiva",
+            "BloqueTipo",
+            "Mensaje",
+            "Sugerencias",
+            "Oración",
+            "Contexto",
+            "Regla",
+            "Categoría",
+            "link_class",
+        ]
 
-        # -----------------------------
+        if resultados_df is None or resultados_df.empty:
+            tmp = pd.DataFrame(columns=desired_cols)
+        else:
+            tmp = resultados_df.copy()
+
+            # Aseguramos las columnas clave aunque no existan todavía
+            for col in ("name", "link_class"):
+                if col not in tmp.columns:
+                    tmp[col] = ""
+
+            # Reordenar columnas según el orden solicitado
+            existing_desired = [c for c in desired_cols if c in tmp.columns]
+            other_cols = [c for c in tmp.columns if c not in existing_desired]
+            ordered_cols = existing_desired + other_cols
+            tmp = tmp[ordered_cols]
+
+        tmp = _sanitize_excel_df(tmp)
+        if tmp is None:
+            tmp = pd.DataFrame(columns=desired_cols)
+
+        tmp.to_excel(w, index=False, sheet_name="Resultados")
+        ws = w.sheets["Resultados"]
+
+        for i, col in enumerate(tmp.columns):
+            try:
+                width = min(
+                    60,
+                    max(
+                        12,
+                        int(tmp[col].astype(str).str.len().quantile(0.9)) + 2,
+                    ),
+                )
+            except Exception:
+                width = 22
+            ws.set_column(i, i, width)
+
+
+         # -----------------------------
         # Hoja 2: ResumenIncidencias
         # -----------------------------
-        if resultados_df is None or resultados_df.empty:
-            resumen_inc = pd.DataFrame(columns=["Archivo", "TotalIncidencias"])
+        # 👉 NUEVA LÓGICA:
+        #    - Usar resumen_completo_df como fuente principal
+        #    - Añadir columna Es_mayor_100_paginas (SI/NO)
+        #    - Forzar TotalIncidencias = 0 cuando Es_mayor_100_paginas == "SI"
+        if resumen_completo_df is None or resumen_completo_df.empty:
+            if resultados_df is None or resultados_df.empty:
+                resumen_inc = pd.DataFrame(columns=["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"])
+            else:
+                tmp = (
+                    resultados_df.groupby("Archivo")
+                    .size()
+                    .reset_index(name="TotalIncidencias")
+                    .sort_values("TotalIncidencias", ascending=False)
+                )
+                tmp["Es_mayor_100_paginas"] = "NO"
+                resumen_inc = tmp[["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]]
         else:
-            resumen_inc = (
-                resultados_df.groupby("Archivo")
-                .size()
-                .reset_index(name="TotalIncidencias")
-                .sort_values("TotalIncidencias", ascending=False)
-            )
+            resumen_tmp = resumen_completo_df.copy()
+
+            # Aseguramos columna Es_mayor_100_paginas
+            if "Es_mayor_100_paginas" not in resumen_tmp.columns:
+                resumen_tmp["Es_mayor_100_paginas"] = "NO"
+
+            # Aseguramos columna TotalIncidencias
+            if "TotalIncidencias" not in resumen_tmp.columns:
+                if resultados_df is not None and not resultados_df.empty:
+                    counts = resultados_df.groupby("Archivo").size().rename("TotalIncidencias")
+                    resumen_tmp = resumen_tmp.merge(counts, on="Archivo", how="left")
+                else:
+                    resumen_tmp["TotalIncidencias"] = 0
+
+            # Normalizar valores
+            resumen_tmp["Es_mayor_100_paginas"] = resumen_tmp["Es_mayor_100_paginas"].fillna("").astype(str).str.upper()
+            resumen_tmp["TotalIncidencias"] = resumen_tmp["TotalIncidencias"].fillna(0).astype(int)
+
+            # Forzar 0 incidencias en los que son > 100 páginas
+            mask_big = resumen_tmp["Es_mayor_100_paginas"].eq("SI")
+            resumen_tmp.loc[mask_big, "TotalIncidencias"] = 0
+
+            resumen_inc = resumen_tmp[["Archivo", "Es_mayor_100_paginas", "TotalIncidencias"]].copy()
+            resumen_inc = resumen_inc.sort_values("TotalIncidencias", ascending=False, kind="mergesort")
 
         resumen_inc = _sanitize_excel_df(resumen_inc)
         resumen_inc.to_excel(w, index=False, sheet_name="ResumenIncidencias")
         ws2 = w.sheets["ResumenIncidencias"]
-        ws2.set_column(0, 0, 40)
-        ws2.set_column(1, 1, 22)
+        ws2.set_column(0, 0, 40)  # Archivo
+        ws2.set_column(1, 1, 18)  # Es_mayor_100_paginas
+        ws2.set_column(2, 2, 22)  # TotalIncidencias
 
         # -----------------------------
         # Hoja 3: ResumenCompleto
@@ -2944,7 +3241,6 @@ def expand_uploaded_files(ups) -> List[LogicalFileSource]:
 
     return logical_files
 
-
 def process_grammarscan_files(
     ups,
     lang_code: str,
@@ -2999,9 +3295,41 @@ def process_grammarscan_files(
             pct,
             detail,
         )
+
+        # ===========================
+        # NUEVO: conteo de páginas
+        # ===========================
+        data: bytes = b""
+        num_paginas: Optional[int] = None
+        es_mayor_100: bool = False
+        ext = lf.ext.lower() if lf.ext else ""
+
         try:
             data = lf.read_bytes()
-            ext = lf.ext
+
+            # Solo aplicamos el filtro duro de > 100 a PDF / DOCX / PPTX
+            if ext in (".pdf", ".docx", ".pptx"):
+                num_paginas = _count_logical_pages_for_grammar(ext, data, lf.display_name)
+                if num_paginas is not None and num_paginas > 100:
+                    es_mayor_100 = True
+
+            # Si es mayor a 100 páginas/diapositivas → NO se analiza con LanguageTool
+            if es_mayor_100:
+                resumen_rows.append({
+                    "Archivo": lf.display_name,
+                    "Extension": ext,
+                    "Estado": "Sin incidencias o sin texto",   # se mantiene la categoría general
+                    "TotalIncidencias": 0,                    # SIEMPRE 0 porque no se analizó
+                    "Detalle": "No analizado (>100 páginas/diapositivas)",
+                    "Paginas": num_paginas,
+                    "Es_mayor_100_paginas": "SI",
+                })
+                # No se añade nada a all_dfs → no aparecerá en la hoja "Resultados"
+                continue
+
+            # ===========================
+            # Análisis normal con LanguageTool
+            # ===========================
             df = analyze_file(
                 lf.display_name,
                 data,
@@ -3012,6 +3340,7 @@ def process_grammarscan_files(
                 modismos_patterns=modismos_patterns,
                 analizar_modismos=analizar_modismos,
             )
+
             if not df.empty:
                 all_dfs.append(df)
                 resumen_rows.append({
@@ -3019,7 +3348,9 @@ def process_grammarscan_files(
                     "Extension": ext,
                     "Estado": "Con incidencias",
                     "TotalIncidencias": int(df.shape[0]),
-                    "Detalle": ""
+                    "Detalle": "",
+                    "Paginas": num_paginas,
+                    "Es_mayor_100_paginas": "NO",
                 })
             else:
                 resumen_rows.append({
@@ -3027,22 +3358,33 @@ def process_grammarscan_files(
                     "Extension": ext,
                     "Estado": "Sin incidencias o sin texto",
                     "TotalIncidencias": 0,
-                    "Detalle": ""
+                    "Detalle": "",
+                    "Paginas": num_paginas,
+                    "Es_mayor_100_paginas": "NO",
                 })
+
         except Exception as e:
+            # Error real procesando el archivo
             resumen_rows.append({
                 "Archivo": lf.display_name,
                 "Extension": lf.ext,
                 "Estado": "Error",
                 "TotalIncidencias": None,
-                "Detalle": safe_str(e)
+                "Detalle": safe_str(e),
+                "Paginas": num_paginas,
+                "Es_mayor_100_paginas": "SI" if es_mayor_100 else "NO",
             })
             st.error(f"Error procesando {lf.display_name}: {e}")
 
     resumen_completo_df = pd.DataFrame(resumen_rows)
-    n_inc = int(resumen_completo_df.query("Estado == 'Con incidencias'")["Archivo"].nunique()) if not resumen_completo_df.empty else 0
-    n_zero = int(resumen_completo_df.query("Estado == 'Sin incidencias o sin texto'")["Archivo"].nunique()) if not resumen_completo_df.empty else 0
-    n_err = int(resumen_completo_df.query("Estado == 'Error'")["Archivo"].nunique()) if not resumen_completo_df.empty else 0
+
+    # Métricas (los >100 páginas se contabilizan dentro de "Sin incidencias o sin texto")
+    if not resumen_completo_df.empty:
+        n_inc = int(resumen_completo_df.query("Estado == 'Con incidencias'")["Archivo"].nunique())
+        n_zero = int(resumen_completo_df.query("Estado == 'Sin incidencias o sin texto'")["Archivo"].nunique())
+        n_err = int(resumen_completo_df.query("Estado == 'Error'")["Archivo"].nunique())
+    else:
+        n_inc = n_zero = n_err = 0
 
     if any(len(df) for df in all_dfs):
         final_df = pd.concat(all_dfs, ignore_index=True)
@@ -3060,7 +3402,6 @@ def process_grammarscan_files(
         "n_err": n_err,
     }
     return final_df, resumen_completo_df, metrics, elapsed
-
 
 # ======================================================
 # PÁGINAS / MÓDULOS
@@ -3358,6 +3699,20 @@ def render_report_grammarscan():
                     st.error("El Excel no contiene la columna requerida: **url**.")
                     st.caption(f"Columnas detectadas: {', '.join(map(str, df_in_bulk.columns.tolist()))}")
                 else:
+                    # Construir mapping URL -> (name, link_class) si existen esas columnas
+                    mapping_cols: List[str] = []
+                    if "name" in df_in_bulk.columns:
+                        mapping_cols.append("name")
+                    if "link_class" in df_in_bulk.columns:
+                        mapping_cols.append("link_class")
+
+                    if mapping_cols:
+                        df_map = df_in_bulk[["url"] + mapping_cols].copy()
+                        df_map["url_norm"] = df_map["url"].map(_normalize_url_for_join)
+                        st.session_state["bulk_url_mapping"] = df_map
+                    else:
+                        st.session_state["bulk_url_mapping"] = None
+
                     # Ya está normalizada, solo descartamos NaN
                     df_urls = df_in_bulk["url"].dropna()
 
@@ -3369,6 +3724,9 @@ def render_report_grammarscan():
                     ]
                     total_urls = len(df_urls)
                     total_permitidas = len(bulk_urls_archivos)
+
+                    # (aquí continúa tu lógica actual de límite de URLs, mensajes, etc.)
+
 
                     # 🔹 Límite duro de seguridad cuando se ejecuta en Streamlit Cloud
                     if IS_STREAMLIT_CLOUD and total_permitidas > MAX_BULK_URLS_CLOUD:
@@ -4115,11 +4473,16 @@ def render_report_grammarscan():
                 excluir_biblio=st.session_state.get("gs_excluir_biblio", True),
                 analizar_modismos=st.session_state.get("gs_modismos", False),
             )
+
+            # 🔹 Enriquecer con name / link_class / source_url antes de guardar
+            final_df = _enrich_grammarscan_with_name_linkclass(final_df)
+
             st.session_state["gs_final_df"] = final_df
             st.session_state["gs_resumen_completo_df"] = resumen_completo_df
             st.session_state["gs_metrics"] = metrics
             st.session_state["gs_elapsed"] = elapsed
             st.session_state["gs_last_files_signature"] = signature
+
 
     # Paso 7: Procesar documentos (automático) + resultados
     ui_card_open()
@@ -4253,6 +4616,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
