@@ -1402,6 +1402,306 @@ def analyze_text(tool, text: str, retries: int = 2, sleep: float = 0.8) -> list:
             time.sleep(sleep)
     raise RuntimeError(f"Fallo LanguageTool local tras reintentos: {last_err}")
 
+
+
+# ======================================================
+# DICCIONARIO PERSONALIZADO / IGNORE LIST (pre-filtro)
+# Se usa SOLO para filtrar MORFOLOGIK_RULE_ES antes de reportar.
+#
+# Archivo ÚNICO esperado (en tu repo):
+#   custom_dictionary_ignore_list.txt
+#
+# Detección automática (en este orden):
+#   - GRAMMARSCAN_CUSTOM_IGNORE_LIST (ruta completa)
+#   - GRAMMARSCAN_CUSTOM_IGNORE_LIST_TXT (ruta completa)
+#   - GRAMMARSCAN_CUSTOM_IGNORE_LIST_PATH (ruta completa)
+#   - GRAMMARSCAN_DICT_DIR + filename
+#   - junto al app.py
+#   - cwd y subcarpetas comunes: dict/, dictionaries/, data/, resources/
+# ======================================================
+
+CUSTOM_IGNORE_FILENAME = "custom_dictionary_ignore_list.txt"
+
+_DIACRITICS_RE = re.compile(r"[\u0300-\u036f]+")
+_LIST_TOKEN_RE = re.compile(r"[A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9]+(?:[’'_-][A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9]+)*")
+_MATHISH_RE = re.compile(r"[\d=<>±×÷√∑∫∞πµ°%*/^\\]|[\u03B1-\u03C9\u0391-\u03A9]")
+
+def _strip_diacritics(s: str) -> str:
+    if not s:
+        return ""
+    return _DIACRITICS_RE.sub("", unicodedata.normalize("NFD", s))
+
+def _norm_token(s: str) -> str:
+    """
+    Normalización conservadora para comparar tokens:
+    - lowercase
+    - sin tildes/diacríticos
+    - colapsa espacios
+    - recorta puntuación alrededor (mantiene guiones internos)
+    """
+    if s is None:
+        return ""
+    s = str(s).strip()
+    if not s:
+        return ""
+    s = s.strip(" \t\r\n\"'“”‘’()[]{}<>.,;:¡!¿?·•")
+    s = _strip_diacritics(s).lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _read_txt_lines(p: Path) -> List[str]:
+    try:
+        raw = p.read_bytes()
+    except Exception:
+        return []
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            s = raw.decode(enc)
+            break
+        except Exception:
+            continue
+    else:
+        s = raw.decode("utf-8", errors="ignore")
+
+    out: List[str] = []
+    for line in s.splitlines():
+        ln = (line or "").strip()
+        if not ln:
+            continue
+        if ln.startswith("#"):
+            continue
+        out.append(ln)
+    return out
+
+def _discover_custom_ignore_path(filename: str = CUSTOM_IGNORE_FILENAME) -> Optional[Path]:
+    """
+    Busca automáticamente el archivo único de ignore list.
+    """
+    filename = str(filename).strip()
+    if not filename:
+        return None
+
+    # 1) Overrides por ruta completa
+    for k in ("GRAMMARSCAN_CUSTOM_IGNORE_LIST", "GRAMMARSCAN_CUSTOM_IGNORE_LIST_TXT", "GRAMMARSCAN_CUSTOM_IGNORE_LIST_PATH"):
+        v = os.environ.get(k, "").strip()
+        if v:
+            try:
+                p = Path(v).expanduser().resolve()
+                if p.is_file():
+                    return p
+            except Exception:
+                pass
+
+    base_dir = Path(__file__).resolve().parent
+    cwd = Path.cwd()
+
+    candidates: List[Path] = []
+
+    # 2) Directorio base por env
+    env_dir = os.environ.get("GRAMMARSCAN_DICT_DIR", "").strip()
+    if env_dir:
+        try:
+            candidates.append(Path(env_dir).expanduser().resolve() / filename)
+        except Exception:
+            pass
+
+    # 3) Ubicaciones típicas del repo
+    candidates += [
+        base_dir / filename,
+        cwd / filename,
+        base_dir / "dict" / filename,
+        base_dir / "dictionaries" / filename,
+        base_dir / "data" / filename,
+        base_dir / "resources" / filename,
+        cwd / "dict" / filename,
+        cwd / "dictionaries" / filename,
+        cwd / "data" / filename,
+        cwd / "resources" / filename,
+    ]
+
+    for c in candidates:
+        try:
+            if c.is_file():
+                return c
+        except Exception:
+            continue
+    return None
+
+@dataclass(frozen=True)
+class CustomIgnoreLists:
+    tokens_norm: frozenset[str]
+    tokens_raw_upper: frozenset[str]
+    full_entries_norm: frozenset[str]
+    paren_entries_norm: frozenset[str]
+    math_tokens_norm: frozenset[str]
+    source_path: str
+
+def _looks_like_math_token(s: str) -> bool:
+    if not s:
+        return False
+    if _MATHISH_RE.search(s):
+        return True
+    if re.search(r"[A-Za-z][0-9]", s) or re.search(r"[0-9][A-Za-z]", s):
+        return True
+    if "_" in s:
+        return True
+    return False
+
+def _extract_parenthetical_group(text: str, offset: int, window: int = 220) -> Optional[str]:
+    if not text:
+        return None
+    n = len(text)
+    left = max(0, offset - window)
+    right = min(n, offset + window)
+    sub = text[left:right]
+    rel = offset - left
+
+    lpar = sub.rfind("(", 0, rel + 1)
+    if lpar < 0:
+        return None
+    rpar = sub.find(")", rel)
+    if rpar < 0:
+        return None
+
+    group = sub[lpar:rpar + 1].strip()
+    if len(group) > 500:
+        return None
+    if "\n" in group and group.count("\n") >= 2:
+        return None
+    return group
+
+def _build_ignore_sets(lines: List[str]) -> tuple[set[str], set[str], set[str], set[str], set[str]]:
+    tokens_norm: set[str] = set()
+    tokens_raw_upper: set[str] = set()
+    full_entries_norm: set[str] = set()
+    paren_entries_norm: set[str] = set()
+    math_tokens_norm: set[str] = set()
+
+    for ln in lines:
+        raw = (ln or "").strip()
+        if not raw:
+            continue
+
+        full_norm = _norm_token(raw)
+        if full_norm:
+            full_entries_norm.add(full_norm)
+
+        # Registros completos entre paréntesis (solo matching exacto por grupo)
+        if raw.startswith("(") and raw.endswith(")"):
+            if full_norm:
+                paren_entries_norm.add(full_norm)
+            continue
+
+        for tok in _LIST_TOKEN_RE.findall(raw):
+            nt = _norm_token(tok)
+            if nt:
+                tokens_norm.add(nt)
+            up = tok.strip().upper()
+            if up and up == tok.strip() and re.fullmatch(r"[A-Z0-9]{1,15}", up or ""):
+                tokens_raw_upper.add(up)
+
+        if " " not in raw and "\t" not in raw:
+            if full_norm:
+                tokens_norm.add(full_norm)
+            up2 = raw.strip().upper()
+            if up2 and up2 == raw.strip() and re.fullmatch(r"[A-Z0-9]{1,15}", up2 or ""):
+                tokens_raw_upper.add(up2)
+
+        if _looks_like_math_token(raw) or _MATHISH_RE.search(raw):
+            for tok in re.findall(r"[A-Za-zÁÉÍÓÚÑÜáéíóúñüµπσθωΔΣΩαβγδ]+[A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9_µπσθωΔΣΩαβγδ\-\./]*", raw):
+                nt = _norm_token(tok)
+                if nt and len(nt) >= 1:
+                    math_tokens_norm.add(nt)
+            if full_norm:
+                math_tokens_norm.add(full_norm)
+
+    return tokens_norm, tokens_raw_upper, full_entries_norm, paren_entries_norm, math_tokens_norm
+
+@st.cache_resource(show_spinner=False)
+def _get_custom_ignore_lists_cached(path_str: str, mtime: float) -> CustomIgnoreLists:
+    """
+    Cachea la lista de ignore y se invalida automáticamente si cambia el mtime del archivo.
+    """
+    p = Path(path_str)
+    lines = _read_txt_lines(p)
+    tokens_norm, tokens_raw_upper, full_entries_norm, paren_entries_norm, math_tokens_norm = _build_ignore_sets(lines)
+
+    logger.info(f"✅ Ignore list cargada: {p} | líneas={len(lines)} | tokens={len(tokens_norm)} | paren={len(paren_entries_norm)}")
+    return CustomIgnoreLists(
+        tokens_norm=frozenset(tokens_norm),
+        tokens_raw_upper=frozenset(tokens_raw_upper),
+        full_entries_norm=frozenset(full_entries_norm),
+        paren_entries_norm=frozenset(paren_entries_norm),
+        math_tokens_norm=frozenset(math_tokens_norm),
+        source_path=str(p),
+    )
+
+def get_custom_ignore_lists() -> CustomIgnoreLists:
+    """
+    Descubre el archivo y delega a la función cacheada.
+    """
+    p = _discover_custom_ignore_path()
+    if not p:
+        logger.warning(f"⚠️  No se encontró '{CUSTOM_IGNORE_FILENAME}'. MORFOLOGIK_RULE_ES se reportará sin ignore list.")
+        return CustomIgnoreLists(
+            tokens_norm=frozenset(),
+            tokens_raw_upper=frozenset(),
+            full_entries_norm=frozenset(),
+            paren_entries_norm=frozenset(),
+            math_tokens_norm=frozenset(),
+            source_path="",
+        )
+
+    try:
+        mtime = float(p.stat().st_mtime)
+    except Exception:
+        mtime = 0.0
+
+    return _get_custom_ignore_lists_cached(str(p), mtime)
+
+def should_ignore_morfologik(match_obj, chunk_text_original: str, offset_in_chunk: int, ignores: CustomIgnoreLists) -> bool:
+    try:
+        rule_id = (getattr(match_obj, "ruleId", None) or "").strip()
+    except Exception:
+        rule_id = ""
+
+    if rule_id != "MORFOLOGIK_RULE_ES":
+        return False
+
+    try:
+        length = int(getattr(match_obj, "errorLength", 0) or 0)
+    except Exception:
+        length = 0
+
+    try:
+        frag = chunk_text_original[offset_in_chunk: offset_in_chunk + max(0, length)]
+    except Exception:
+        frag = ""
+
+    frag = (frag or "").strip()
+    if not frag:
+        return True
+
+    grp = _extract_parenthetical_group(chunk_text_original, offset_in_chunk)
+    if grp:
+        gnorm = _norm_token(grp)
+        if gnorm and (gnorm in ignores.paren_entries_norm or gnorm in ignores.full_entries_norm):
+            return True
+
+    if frag.upper() in ignores.tokens_raw_upper:
+        return True
+
+    norm = _norm_token(frag)
+    if norm and (norm in ignores.tokens_norm or norm in ignores.full_entries_norm):
+        return True
+
+    if _looks_like_math_token(frag):
+        if norm and (norm in ignores.math_tokens_norm or norm in ignores.tokens_norm):
+            return True
+        return True
+
+    return False
+
 def detect_modismos_in_pages(
     file_name: str,
     pages: List[Tuple[int, str]],
@@ -1515,6 +1815,10 @@ def analyze_file(
     tool = get_language_tool(lang_code)
 
 
+
+    # 5.1) Cargar ignore list (archivo único) para MORFOLOGIK_RULE_ES
+    ignores = get_custom_ignore_lists()
+
     rows: List[Dict[str, Any]] = []
     lock = threading.Lock()
 
@@ -1589,6 +1893,11 @@ def analyze_file(
 
         for m in matches:
             offset_in_chunk = m.offset
+
+
+            # 🔕 Ignore list (antes de reportar MORFOLOGIK_RULE_ES)
+            if should_ignore_morfologik(m, chunk_text_original, offset_in_chunk, ignores):
+                continue
 
             # Offset global = inicio global del chunk + offset local
             global_offset = chunk_start_offset + offset_in_chunk
@@ -4297,9 +4606,7 @@ def render_report_grammarscan():
                     1.0,
                     "No hay PDFs pendientes; se continuará con Word/PPTX.",
                 )
-
-
-            
+          
             # 2) DOCX generados desde PDFs + DOCX originales (rutas)
             generated_docx_paths: List[str] = []
             generated_docx_meta: Dict[str, Dict[str, Any]] = {}
@@ -4455,8 +4762,7 @@ def render_report_grammarscan():
         all_uploaded_files.append(fake_file)
     
     # 3. Archivos PDF originales (opcional, si se quieren analizar directamente)
-    # Podríamos permitir analizar PDFs directamente también
-    
+    # Podríamos permitir analizar PDFs directamente también 
     # Uploader adicional para archivos manuales
     uploader_key = f"gs_uploader_{st.session_state['gs_uploader_key']}"
     manual_ups = st.file_uploader(
@@ -4529,7 +4835,6 @@ def render_report_grammarscan():
             st.session_state["gs_metrics"] = metrics
             st.session_state["gs_elapsed"] = elapsed
             st.session_state["gs_last_files_signature"] = signature
-
 
     # Paso 7: Procesar documentos (automático) + resultados
     ui_card_open()
@@ -4663,6 +4968,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
