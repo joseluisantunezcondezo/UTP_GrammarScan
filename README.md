@@ -108,7 +108,7 @@ Aquí se muestran:
 - Métricas
 - Barras de progreso
 - Botones de descarga
-- tablas de resultados.
+- Tablas de resultados.
 
 ### 2. Capa de procesamiento documental
 Es la parte que trabaja directamente con los archivos.
