@@ -1,788 +1,476 @@
 # 📚 UTP - GrammarScan
 
-> **Sistema inteligente de análisis gramatical y procesamiento masivo de documentos académicos**
+> Aplicativo web en Streamlit para descarga masiva, transformación y revisión automatizada de ortografía y gramática en documentos académicos y administrativos.
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
-[![Status](https://img.shields.io/badge/Status-Production-success.svg)]()
+[![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B.svg)](https://streamlit.io/)
+[![Estado](https://img.shields.io/badge/Estado-Producción-success.svg)]()
 
 ---
 
-## 📖 Índice
+## 📌 Descripción general
 
-- [¿Qué es UTP - GrammarScan?](#-qué-es-utp---grammarscan)
-- [Características Principales](#-características-principales)
-- [Casos de Uso](#-casos-de-uso)
-- [Arquitectura del Sistema](#-arquitectura-del-sistema)
-- [Instalación](#-instalación)
-- [Configuración](#-configuración)
-- [Guía de Uso](#-guía-de-uso)
-- [Formatos Soportados](#-formatos-soportados)
-- [API y Componentes](#-api-y-componentes)
-- [Mejores Prácticas](#-mejores-prácticas)
-- [Solución de Problemas](#-solución-de-problemas)
-- [Contribuir](#-contribuir)
-- [Roadmap](#-roadmap)
-- [Licencia](#-licencia)
+**UTP - GrammarScan** es una aplicación pensada para simplificar la revisión documental en entornos académicos.
+Permite descargar archivos desde un Excel con URLs, procesar documentos PDF, Word, PowerPoint, TXT o ZIP, analizar el contenido con **LanguageTool local**, detectar **modismos argentinos** de forma opcional y generar un **reporte Excel** con incidencias, sugerencias y contexto.
+
+En términos simples, la herramienta ayuda a responder esta necesidad:
+
+- Recibir muchos documentos desde distintas fuentes.
+- Estandarizarlos para poder analizarlos.
+- Revisar ortografía y gramática de forma automatizada.
+- Entregar un reporte listo para revisión académica o administrativa.
 
 ---
 
-## 🎯 ¿Qué es UTP - GrammarScan?
+## 🎯 ¿Qué problema resuelve?
 
-**GrammarScan** es una aplicación web diseñada para la **Universidad Tecnológica del Perú (UTP)** que automatiza el análisis gramatical y la gestión de documentos académicos. El sistema permite procesar grandes volúmenes de documentos, detectar errores gramaticales, identificar modismos regionales y generar reportes detallados en formato Excel.
+La revisión manual de documentos suele ser lenta, repetitiva y difícil de escalar cuando se trabaja con muchos archivos.
 
-### 🌟 Problema que Resuelve
+Este aplicativo resuelve ese problema porque:
 
-La revisión manual de documentos académicos es:
-- ⏰ **Lenta**: Requiere horas de trabajo manual
-- 🔍 **Inconsistente**: Depende de la experiencia del revisor
-- 📊 **No escalable**: Difícil de procesar grandes volúmenes
-- 📝 **Sin trazabilidad**: No genera reportes automáticos
-
-**GrammarScan soluciona estos problemas mediante:**
-- ✅ Análisis automatizado con LanguageTool
-- ✅ Procesamiento paralelo de múltiples documentos
-- ✅ Detección de modismos regionales personalizables
-- ✅ Reportes Excel con trazabilidad completa
-- ✅ Pipeline de descarga y análisis integrado
+- automatiza la descarga de documentos desde un Excel,
+- convierte PDFs a Word para facilitar su procesamiento,
+- analiza ortografía y gramática con reglas robustas,
+- filtra bibliografía para reducir falsos positivos,
+- genera un Excel final con resultados detallados.
 
 ---
 
-## ⚡ Características Principales
+## 👥 ¿Para quién está pensado?
 
-### 🔍 Análisis Gramatical Avanzado
+### Usuarios no técnicos
 
-- **Motor de análisis**: Integración con [LanguageTool](https://languagetool.org/)
-- **Idiomas soportados**: Español, Inglés, y más
-- **Tipos de detección**:
-  - Errores ortográficos
-  - Errores gramaticales
-  - Sugerencias de estilo
-  - Detección de modismos regionales (configurable)
-  
-### 📥 Descarga Masiva Inteligente
+Este aplicativo está orientado a personas que necesitan **revisar calidad de redacción** sin intervenir en código, por ejemplo:
 
-- **Desde Excel**: Procesa URLs desde archivos Excel
-- **Reintentos automáticos**: Hasta 7 intentos con backoff exponencial
-- **Manejo de errores**: Continúa procesando incluso si algunas descargas fallan
-- **Formatos soportados**: PDF, DOCX, PPTX, DOC, PPT
-- **Límite Cloud**: 700 URLs (configurable para ejecución local)
+- docentes,
+- coordinadores académicos,
+- equipos de calidad,
+- personal administrativo,
+- revisores de contenido.
 
-### 🔄 Pipeline Automatizado
+### Usuarios técnicos
 
-```
-Excel con URLs → Descarga Masiva → Conversión → Análisis → Reporte Excel
-```
+También está pensado para quienes necesiten **mantener, desplegar o mejorar** la solución:
 
-1. **Entrada**: Excel con columna de URLs
-2. **Descarga**: Sistema paralelo con reintentos
-3. **Conversión**: Documentos a formatos analizables
-4. **Análisis**: LanguageTool + Detección de modismos
-5. **Salida**: Excel con resultados detallados
-
-### 📊 Reportes Detallados
-
-Genera archivos Excel con dos hojas:
-- **Resultados**: Incidencias por documento con contexto
-- **Resumen**: Estadísticas agregadas por archivo
-
-### 🎨 Interfaz Moderna
-
-- Diseño responsive con Streamlit
-- Cards visuales con estados de progreso
-- Descarga automática de resultados
-- Feedback en tiempo real
+- desarrolladores Python,
+- analistas de automatización,
+- responsables de despliegue en Streamlit,
+- equipos de soporte técnico.
 
 ---
 
-## 💼 Casos de Uso
+## ✅ ¿Qué puede hacer el aplicativo?
 
-### 1️⃣ Revisión de Trabajos Académicos
+### Funcionalidades principales
 
-**Escenario**: Docente necesita revisar 50 ensayos de estudiantes
-
-**Proceso**:
-1. Recopila los ensayos en formato PDF/DOCX
-2. Sube los archivos al sistema (puede subir ZIP)
-3. Configura idioma español y activa detección de modismos
-4. Obtiene reporte Excel con todas las incidencias
-5. Filtra por tipo de error para dar feedback específico
-
-**Beneficio**: Ahorra 80% del tiempo de revisión manual
-
-### 2️⃣ Auditoría de Contenido Educativo
-
-**Escenario**: Institución necesita auditar 500 documentos almacenados en URLs
-
-**Proceso**:
-1. Exporta lista de URLs desde su sistema a Excel
-2. Carga el Excel en el módulo de descarga masiva
-3. Sistema descarga y analiza automáticamente
-4. Obtiene reporte consolidado con métricas de calidad
-
-**Beneficio**: Centraliza auditoría de todo el contenido
-
-### 3️⃣ Estandarización de Lenguaje
-
-**Escenario**: Universidad quiere eliminar modismos regionales de material didáctico
-
-**Proceso**:
-1. Configura archivo `modismos_ar.xlsx` con expresiones a detectar
-2. Procesa documentos con detección de modismos activada
-3. Revisa sugerencias de reemplazo en el reporte
-4. Actualiza documentos según estándares institucionales
-
-**Beneficio**: Mantiene consistencia en todo el material académico
+- **Descarga masiva desde Excel** usando una columna `url`.
+- **Carga manual** de archivos PDF, DOCX, PPTX, TXT y ZIP.
+- **Conversión de PDF a Word** para normalizar documentos antes del análisis.
+- **Análisis ortográfico y gramatical** con LanguageTool local.
+- **Detección opcional de modismos argentinos** mediante `modismos_ar.xlsx`.
+- **Filtrado de bibliografía y referencias** para disminuir ruido en los resultados.
+- **Exportación a Excel** con detalle de incidencias y resumen consolidado.
+- **Descarga automática del Excel final** desde la interfaz.
+- **Persistencia de flujo por sesión** usando `st.session_state`.
 
 ---
 
-## 🏗️ Arquitectura del Sistema
+## 🧭 Flujo funcional del usuario
 
-### Vista de Alto Nivel
+### Flujo resumido
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     INTERFAZ WEB (Streamlit)                │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │    Home      │  │  GrammarScan │  │   Reportes   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    CAPA DE PROCESAMIENTO                     │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Pipeline de Descarga Masiva                         │   │
-│  │  • ThreadPoolExecutor para descargas paralelas       │   │
-│  │  • Sistema de reintentos con backoff exponencial     │   │
-│  │  • Validación de extensiones y tamaños               │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Extracción de Texto                                 │   │
-│  │  • PDF: pdfplumber + PyMuPDF (fitz)                 │   │
-│  │  • DOCX: python-docx                                 │   │
-│  │  • PPTX: python-pptx                                 │   │
-│  │  • TXT: lectura directa                              │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Motor de Análisis                                   │   │
-│  │  • LanguageTool (análisis gramatical)                │   │
-│  │  • Sistema de detección de modismos (regex patterns) │   │
-│  │  • Normalización de texto                            │   │
-│  │  • Paginación virtual (50 líneas/página)             │   │
-│  └──────────────────────────────────────────────────────┘   │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    CAPA DE DATOS                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  DataFrames  │  │ Excel Output │  │  ZIP Temp    │      │
-│  │  (Pandas)    │  │ (openpyxl)   │  │  Storage     │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
+```text
+Excel con URLs o archivos directos
+        ↓
+Descarga masiva de documentos
+        ↓
+Conversión de PDFs a Word
+        ↓
+Preparación de documentos para análisis
+        ↓
+Validación ortográfica y gramatical
+        ↓
+Reporte final en Excel
 ```
 
-### Componentes Principales
+### Flujo de uso dentro del aplicativo
 
-#### 1. **GrammarScan Core** (`process_grammarscan_files`)
-- **Responsabilidad**: Orquestar todo el proceso de análisis
-- **Entrada**: Lista de archivos (UploadedFile o LogicalFileSource)
-- **Salida**: DataFrames con resultados y resúmenes
-- **Características**:
-  - Procesamiento paralelo con ThreadPoolExecutor
-  - Manejo robusto de errores por archivo
-  - Métricas de procesamiento en tiempo real
-
-#### 2. **Text Extractor** (`extract_text_from_...`)
-- **Responsabilidad**: Extraer texto de diferentes formatos
-- **Métodos especializados**:
-  - `extract_text_from_pdf()`: PDF → texto plano
-  - `extract_text_from_docx()`: DOCX → texto + tablas
-  - `extract_text_from_pptx()`: PPTX → texto de slides
-  - `extract_text_from_txt()`: TXT → texto directo
-- **Características**:
-  - Normalización de espacios en blanco
-  - Manejo de caracteres especiales
-  - Extracción de tablas (DOCX)
-
-#### 3. **LanguageTool Client** (`call_languagetool`)
-- **Responsabilidad**: Comunicación con API de LanguageTool
-- **Características**:
-  - División automática de textos largos (30,000 caracteres)
-  - Manejo de errores de red
-  - Soporte multi-idioma
-- **Endpoint**: Configurable (local o cloud)
-
-#### 4. **Modismos Detector** (`detect_modismos`)
-- **Responsabilidad**: Detectar expresiones regionales
-- **Fuente**: Archivo Excel `modismos_ar.xlsx`
-- **Tipos de patrones**:
-  - Literales: Búsqueda exacta
-  - Regex: Patrones complejos
-- **Salida**: Lista de coincidencias con contexto
-
-#### 5. **Bulk Downloader** (`download_urls_from_excel`)
-- **Responsabilidad**: Descarga masiva paralela
-- **Características**:
-  - Hasta 7 reintentos por URL
-  - Backoff exponencial
-  - Validación de extensiones
-  - Límite de tamaño (200 MB)
-  - Progreso en tiempo real
-
-#### 6. **Excel Reporter** (`to_excel_bytes`)
-- **Responsabilidad**: Generar reportes Excel
-- **Estructura**:
-  - Hoja "Resultados": Detalle de incidencias
-  - Hoja "Resumen": Estadísticas por archivo
-- **Formato**: XLSX con estilos y filtros
+1. El usuario puede cargar un **Excel con URLs** de documentos.
+2. La app descarga automáticamente archivos compatibles.
+3. Si existen PDFs, la app los transforma a **DOCX**.
+4. El usuario también puede subir documentos manualmente o en ZIP.
+5. El sistema analiza los archivos admitidos.
+6. Se muestran métricas e incidencias detectadas.
+7. Se genera un **Excel final** con resultados y resumen.
+8. El archivo Excel se descarga desde la interfaz.
 
 ---
 
-## 🚀 Instalación
+## 🏗️ Arquitectura explicada de forma sencilla
 
-### Prerrequisitos
+La arquitectura del aplicativo se puede entender en **4 capas**:
 
-- **Python**: 3.8 o superior
-- **Java**: 8 o superior (requerido por LanguageTool)
-- **Memoria RAM**: Mínimo 2 GB (4 GB recomendado)
-- **Espacio en disco**: 500 MB para dependencias
+### 1. Capa de interfaz
+Es la pantalla que ve el usuario en Streamlit.
 
-### Instalación Local
+Aquí se muestran:
+- el módulo Home,
+- el módulo Report GrammarScan,
+- expanders,
+- métricas,
+- barras de progreso,
+- botones de descarga,
+- tablas de resultados.
 
-#### 1. Clonar el repositorio
+### 2. Capa de orquestación
+Es la lógica que coordina el flujo completo usando `st.session_state`.
 
-```bash
-git clone https://github.com/joseluisantunezcondezo/UTP_GrammarScan.git
-cd UTP_GrammarScan
-```
+Esta capa decide:
+- qué parte del proceso ya fue ejecutada,
+- cuándo reiniciar el pipeline,
+- cuándo reutilizar resultados previos,
+- cuándo relanzar análisis automáticamente.
 
-#### 2. Crear entorno virtual
+### 3. Capa de procesamiento documental
+Es la parte que trabaja directamente con los archivos.
 
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
+Incluye:
+- descarga masiva desde URLs,
+- lectura de PDF, DOCX, PPTX y TXT,
+- extracción de texto,
+- conversión PDF → DOCX,
+- expansión de ZIP,
+- conteo lógico de páginas,
+- filtros de bibliografía.
 
-# Linux/Mac
-python3 -m venv venv
-source venv/bin/activate
-```
+### 4. Capa de análisis y salida
+Es donde ocurre la validación lingüística y la generación del resultado final.
 
-#### 3. Instalar dependencias
+Incluye:
+- LanguageTool local,
+- detección de modismos,
+- limpieza de incidencias inválidas,
+- enriquecimiento de metadata,
+- exportación a Excel.
 
-```bash
-pip install -r requirements.txt
-```
+---
 
-#### 4. Verificar instalación de Java
+## 🧱 Arquitectura técnica
 
-```bash
-java -version
-```
-
-Si Java no está instalado:
-- **Windows**: Descargar desde [java.com](https://www.java.com/)
-- **Linux**: `sudo apt-get install default-jre`
-- **Mac**: `brew install java`
-
-#### 5. Ejecutar la aplicación
-
-```bash
-streamlit run app.py
-```
-
-La aplicación se abrirá automáticamente en `http://localhost:8501`
-
-### Instalación con Docker (Opcional)
-
-```bash
-# Construir imagen
-docker build -t utp-grammarscan .
-
-# Ejecutar contenedor
-docker run -p 8501:8501 utp-grammarscan
+```text
+┌──────────────────────────────────────────────┐
+│ Interfaz Streamlit                           │
+│ - Home                                       │
+│ - Report GrammarScan                         │
+│ - Sidebar / métricas / progreso / descargas │
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────┐
+│ Orquestación de sesión                       │
+│ - init_session_state()                       │
+│ - reset_report_broken_pipeline()             │
+│ - reset_grammarscan_state()                  │
+│ - reset_full_pipeline()                      │
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────┐
+│ Procesamiento documental                     │
+│ - _run_descarga_masiva_streamlit()           │
+│ - PDFBatchProcessor                          │
+│ - expand_uploaded_files()                    │
+│ - extract_pages()                            │
+│ - read_pdf_pages() / read_docx_pages()       │
+│ - read_pptx_slides() / read_txt_pages()      │
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────┐
+│ Análisis lingüístico                         │
+│ - get_language_tool()                        │
+│ - analyze_text()                             │
+│ - analyze_file()                             │
+│ - detect_modismos_in_pages()                 │
+│ - detect_bibliography_pages()                │
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼
+┌──────────────────────────────────────────────┐
+│ Reportería y salida                          │
+│ - process_grammarscan_files()                │
+│ - _enrich_grammarscan_with_name_linkclass()  │
+│ - to_excel_bytes()                           │
+│ - descarga manual y automática del Excel     │
+└──────────────────────────────────────────────┘
 ```
 
 ---
 
-## ⚙️ Configuración
+## 🧩 Módulos del aplicativo
 
-### Archivo `modismos_ar.xlsx`
+## 1. Home
+Muestra el propósito del sistema, sus funcionalidades, el flujo de trabajo y recomendaciones generales de uso.
 
-Este archivo configura los modismos a detectar. Debe contener las siguientes columnas:
+## 2. Report GrammarScan
+Concentra el flujo operativo principal:
 
-| Columna | Tipo | Descripción | Ejemplo |
-|---------|------|-------------|---------|
-| `modismo` | Texto | Expresión a detectar | "che" |
-| `tipo` | literal/regex | Tipo de patrón | "literal" |
-| `patron` | Texto | Patrón regex (opcional) | `\bche\b` |
-| `sugerencia` | Texto | Reemplazo sugerido | "oye" |
-| `comentario` | Texto | Explicación | "Modismo argentino" |
-
-#### Ejemplo de contenido:
-
-```
-modismo,tipo,patron,sugerencia,comentario
-che,literal,,oye,Modismo argentino informal
-boludo,literal,,compañero,Modismo argentino coloquial
-vos,regex,\bvos\b,tú,Pronombre argentino
-```
-
-### Variables de Entorno
-
-#### Para Streamlit Cloud
-
-Crear archivo `.streamlit/secrets.toml`:
-
-```toml
-[general]
-is_streamlit_cloud = true
-max_bulk_urls = 700
-
-[languagetool]
-api_url = "https://api.languagetool.org/v2/check"
-# O usar instancia local:
-# api_url = "http://localhost:8081/v2/check"
-```
-
-#### Para ejecución local
-
-Crear archivo `.env`:
-
-```bash
-IS_STREAMLIT_CLOUD=false
-MAX_BULK_URLS=2000
-LANGUAGETOOL_API_URL=http://localhost:8081/v2/check
-```
-
-### LanguageTool Local (Recomendado para producción)
-
-Para mejor rendimiento y privacidad, instalar LanguageTool local:
-
-```bash
-# Descargar LanguageTool
-wget https://languagetool.org/download/LanguageTool-stable.zip
-unzip LanguageTool-stable.zip
-
-# Iniciar servidor
-cd LanguageTool-*/
-java -cp languagetool-server.jar org.languagetool.server.HTTPServer --port 8081
-```
-
-Actualizar en el código (línea ~300):
-
-```python
-LT_API_URL = "http://localhost:8081/v2/check"
-```
+- carga del Excel con URLs,
+- descarga masiva,
+- descarga de ZIPs consolidados,
+- carga directa de documentos,
+- conversión de PDF a Word,
+- análisis ortográfico y gramatical,
+- exportación automática a Excel.
 
 ---
 
-## 📘 Guía de Uso
+## 🔄 Pipeline operativo real
 
-### Módulo 1: Home
+### Etapa A. Descarga masiva desde Excel
+Entrada esperada:
+- un Excel con la columna `url`.
 
-Pantalla de bienvenida con información general del sistema.
+La app:
+- filtra extensiones permitidas,
+- valida límites en Streamlit Cloud,
+- descarga documentos con reintentos,
+- genera ZIP de archivos descargados,
+- genera CSV de descargas fallidas cuando aplica.
 
-### Módulo 2: Report GrammarScan
+### Etapa B. Carga directa de documentos
+El usuario puede subir:
+- PDF,
+- DOCX,
+- PPTX,
+- ZIP con documentos dentro.
 
-#### Flujo Completo (con descarga masiva)
+Los formatos `.doc` y `.ppt` se identifican, pero se marcan como no soportados para análisis directo.
 
-**Paso 1: Configurar descarga masiva**
+### Etapa C. Transformación PDF → Word
+Los PDFs pueden convertirse a DOCX para integrarlos al flujo posterior.
 
-1. Prepare un archivo Excel con columna `link` o `url`
-2. Cada fila debe contener una URL válida a documento
-3. Suba el Excel en el Paso 1
+### Etapa D. Análisis GrammarScan
+Se procesan los archivos válidos con:
+- extracción de texto,
+- filtrado de bibliografía,
+- control de URLs dentro del texto,
+- revisión con LanguageTool,
+- detección opcional de modismos.
 
-**Paso 2: Configurar parámetros de descarga**
-
-- **Workers paralelos**: 4-8 (más rápido pero consume más recursos)
-- **Reintentos**: 7 (por defecto)
-- **Timeout**: 30 segundos
-
-**Paso 3: Ejecutar descarga**
-
-- Haga clic en "Descargar archivos"
-- Observe el progreso en tiempo real
-- Descargue el ZIP generado
-
-**Paso 4: Configurar análisis gramatical**
-
-- **Idioma**: Español (es) o Inglés (en)
-- **Máx. caracteres**: 30,000 por llamada
-- **Workers**: 4 (recomendado)
-- **Excluir bibliografía**: Activado (recomendado)
-- **Analizar modismos**: Según necesidad
-
-**Paso 5: Subir documentos**
-
-- Los documentos descargados aparecen automáticamente
-- También puede subir archivos manualmente
-- Soporta archivos individuales o ZIP
-
-**Paso 6: Procesar documentos**
-
-- El análisis inicia automáticamente al subir archivos
-- Visualice métricas en tiempo real:
-  - Total de documentos
-  - Con incidencias
-  - Sin incidencias
-  - Errores
-
-**Paso 7: Descargar reporte Excel**
-
-- Se genera automáticamente al finalizar
-- Contiene 2 hojas:
-  - **Resultados**: Todas las incidencias detectadas
-  - **Resumen**: Estadísticas por archivo
-
-#### Flujo Rápido (solo análisis)
-
-1. Vaya directo al Paso 6
-2. Suba sus archivos (PDF, DOCX, PPTX, TXT, ZIP)
-3. Configure parámetros de análisis
-4. Obtenga resultados y descargue Excel
+### Etapa E. Exportación
+La aplicación genera:
+- **Resultados**: detalle de incidencias,
+- **ResumenIncidencias**,
+- **ResumenCompleto**.
 
 ---
 
-## 📄 Formatos Soportados
+## 📂 Formatos soportados
 
 ### Entrada
 
-| Formato | Extensión | Notas |
-|---------|-----------|-------|
-| PDF | `.pdf` | Extrae texto y tablas |
-| Word | `.docx` | Extrae texto, tablas y estilos |
-| PowerPoint | `.pptx` | Extrae texto de slides |
-| Texto plano | `.txt` | Lectura directa |
-| ZIP | `.zip` | Descomprime y procesa contenido |
-| Word Legacy | `.doc` | A través de conversión |
-| PowerPoint Legacy | `.ppt` | A través de conversión |
+| Tipo | Extensión | Estado |
+|------|-----------|--------|
+| PDF | `.pdf` | Soportado |
+| Word | `.docx` | Soportado |
+| PowerPoint | `.pptx` | Soportado |
+| Texto | `.txt` | Soportado |
+| ZIP | `.zip` | Soportado |
+| Word legado | `.doc` | Detectado, no recomendado |
+| PowerPoint legado | `.ppt` | Detectado, no recomendado |
 
 ### Salida
 
-| Formato | Nombre de archivo | Contenido |
-|---------|-------------------|-----------|
-| Excel | `UTP_GrammarScan_Resultados.xlsx` | Resultados + Resumen |
-| ZIP | `bulk_download_TIMESTAMP.zip` | Archivos descargados |
+| Tipo | Archivo |
+|------|---------|
+| Excel final | `UTP_GrammarScan_Resultados.xlsx` |
+| ZIP de descarga | `Descarga_Masiva_Documentos_*.zip` |
+| CSV de fallidos | `descargas_fallidas.csv` |
 
 ---
 
-## 🔧 API y Componentes
+## 🧠 Componentes técnicos clave
 
-### Funciones Principales
+### `init_session_state()`
+Inicializa el estado persistente del flujo para que la app recuerde resultados, cargas y pasos ya ejecutados dentro de la sesión.
 
-#### `process_grammarscan_files()`
+### `PDFBatchProcessor`
+Clase encargada de procesar PDFs y convertir su contenido a DOCX.
 
-Procesa múltiples archivos y genera análisis gramatical.
+### `process_grammarscan_files()`
+Función orquestadora del análisis principal. Recorre archivos lógicos, aplica reglas, arma métricas y construye los DataFrames finales.
 
-**Parámetros**:
-```python
-def process_grammarscan_files(
-    ups: List[UploadedFile],
-    lang_code: str = "es",
-    max_chars_call: int = 30000,
-    workers: int = 4,
-    excluir_biblio: bool = True,
-    analizar_modismos: bool = False
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict, float]:
-```
+### `analyze_file()`
+Analiza un archivo individual. Extrae páginas, aplica filtros, ejecuta LanguageTool y arma incidencias por archivo.
 
-**Retorna**:
-- `final_df`: DataFrame con incidencias detalladas
-- `resumen_df`: DataFrame con estadísticas por archivo
-- `metrics`: Diccionario con métricas de procesamiento
-- `elapsed`: Tiempo total de procesamiento
+### `detect_bibliography_pages()`
+Reduce falsos positivos detectando páginas o fragmentos que parecen bibliografía o referencias.
 
-**Ejemplo de uso**:
-```python
-results, summary, metrics, time = process_grammarscan_files(
-    ups=uploaded_files,
-    lang_code="es",
-    max_chars_call=30000,
-    workers=4,
-    excluir_biblio=True,
-    analizar_modismos=True
-)
-```
+### `to_excel_bytes()`
+Convierte los resultados a un Excel descargable con hojas de resultados y resumen.
 
-#### `download_urls_from_excel()`
+---
 
-Descarga archivos desde URLs en Excel.
+## 🗂️ Archivos importantes del proyecto
 
-**Parámetros**:
-```python
-def download_urls_from_excel(
-    excel_bytes: bytes,
-    max_workers: int = 4,
-    max_retries: int = 7,
-    progress_callback: Optional[Callable] = None
-) -> Tuple[List[str], Dict]:
-```
-
-**Retorna**:
-- Lista de rutas de archivos descargados
-- Diccionario con estadísticas de descarga
-
-#### `call_languagetool()`
-
-Realiza llamada a LanguageTool API.
-
-**Parámetros**:
-```python
-def call_languagetool(
-    text: str,
-    lang_code: str = "es",
-    max_chars: int = 30000
-) -> List[Dict]:
-```
-
-**Retorna**:
-- Lista de incidencias detectadas
-
-### Estructuras de Datos
-
-#### ModismoPattern (DataClass)
-
-```python
-@dataclass
-class ModismoPattern:
-    modismo: str          # Expresión a buscar
-    tipo: str             # "literal" o "regex"
-    patron: str           # Patrón regex
-    sugerencia: str       # Reemplazo sugerido
-    comentario: str       # Explicación
-    regex: re.Pattern     # Patrón compilado
-```
-
-#### LogicalFileSource (DataClass)
-
-```python
-@dataclass
-class LogicalFileSource:
-    display_name: str                    # Nombre para mostrar
-    ext: str                             # Extensión (.pdf, .docx, etc.)
-    read_bytes: Callable[[], bytes]      # Función para leer contenido
+```text
+app.py                              # Aplicación principal Streamlit
+modismos_ar.xlsx                    # Diccionario de modismos argentinos
+custom_dictionary_ignore_list.txt   # Lista de términos a ignorar para reglas morfológicas
+requirements.txt                    # Dependencias del proyecto
+.streamlit/                         # Configuración para despliegue en Streamlit
 ```
 
 ---
 
-## ✅ Mejores Prácticas
+## ⚙️ Requisitos para ejecución
 
-### Para Usuarios
+### Requisitos base
 
-#### Descarga Masiva
+- Python 3.8 o superior
+- Java instalado y accesible en el sistema
+- Dependencias Python del proyecto
 
-1. **Lotes pequeños**: Procese máximo 500-700 URLs por ejecución
-2. **Excel limpio**: Asegúrese de que la columna de URLs no tenga celdas vacías
-3. **URLs válidas**: Verifique que las URLs sean accesibles
-4. **Formato correcto**: Use extensiones permitidas (.pdf, .docx, .pptx)
+### Dependencias principales usadas por la app
 
-#### Análisis Gramatical
+- `streamlit`
+- `pandas`
+- `pdfplumber`
+- `PyMuPDF` (`fitz`)
+- `python-docx`
+- `python-pptx`
+- `requests`
+- `language_tool_python`
 
-1. **Idioma correcto**: Seleccione el idioma del documento
-2. **Excluir bibliografía**: Active para ignorar referencias
-3. **Modismos**: Solo active si necesita detectarlos (consume más tiempo)
-4. **Workers**: Use 4 para balance entre velocidad y recursos
+---
 
-### Para Desarrolladores
+## 🚀 Ejecución local
 
-#### Código Limpio
-
-```python
-# ✅ CORRECTO: Usar funciones auxiliares
-def process_document(file_source: LogicalFileSource) -> pd.DataFrame:
-    text = extract_text(file_source)
-    results = analyze_text(text)
-    return format_results(results)
-
-# ❌ INCORRECTO: Código monolítico
-def process_document(file_source):
-    # 500 líneas de código mezclando extracción, análisis y formato
-    ...
+```bash
+python -m venv venv
 ```
 
-#### Manejo de Errores
+### Windows
 
-```python
-# ✅ CORRECTO: Manejo específico por tipo de error
-try:
-    results = call_languagetool(text)
-except requests.Timeout:
-    logger.warning(f"Timeout para {file_name}")
-    results = []
-except Exception as e:
-    logger.error(f"Error inesperado: {e}")
-    raise
-
-# ❌ INCORRECTO: Captura genérica que oculta problemas
-try:
-    results = call_languagetool(text)
-except:
-    pass
+```bash
+venv\Scripts\activate
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-#### Performance
+### Linux / macOS
 
-```python
-# ✅ CORRECTO: Procesamiento paralelo
-with ThreadPoolExecutor(max_workers=4) as executor:
-    futures = {executor.submit(process_doc, doc): doc for doc in docs}
-    results = [future.result() for future in as_completed(futures)]
-
-# ❌ INCORRECTO: Procesamiento secuencial
-results = [process_doc(doc) for doc in docs]
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
 ---
 
-## 🔍 Solución de Problemas
+## 🖥️ Recomendaciones de uso
 
-### Problema: "Java no encontrado"
+### Para usuarios funcionales
 
-**Síntoma**: Error al iniciar aplicación
-```
-FileNotFoundError: Java no está instalado
-```
+- Usa un Excel limpio con columna `url`.
+- Si el lote es grande, trabaja por bloques.
+- Usa ZIP cuando tengas muchos archivos manuales.
+- Activa la exclusión de bibliografía para obtener resultados más limpios.
+- Activa modismos argentinos solo cuando realmente lo necesites.
 
-**Solución**:
-1. Instalar Java JRE 8+
-2. Verificar con `java -version`
-3. Agregar Java al PATH del sistema
+### Para despliegue en Streamlit Cloud
 
-### Problema: Memoria insuficiente en Streamlit Cloud
+- Se recomienda trabajar entre **500 y 700 registros** por lote.
+- Para cargas mayores, conviene dividir el Excel o ejecutar localmente.
+- Esta recomendación ayuda a evitar problemas de memoria del contenedor.
 
-**Síntoma**: Aplicación se detiene al procesar muchos archivos
+### Para mantenimiento técnico
 
-**Solución**:
-1. Reducir número de URLs a 500-700
-2. Dividir Excel en múltiples archivos
-3. Ejecutar en local para lotes grandes
-
-### Problema: LanguageTool muy lento
-
-**Síntoma**: Análisis toma mucho tiempo
-
-**Solución**:
-1. Instalar LanguageTool local (no usar API pública)
-2. Reducir `max_chars_call` a 15000
-3. Desactivar análisis de modismos si no es necesario
-
-### Problema: Documentos PDF no se procesan
-
-**Síntoma**: PDF aparece como "sin texto"
-
-**Solución**:
-1. Verificar que el PDF no sea imagen escaneada
-2. Usar OCR si el PDF es imagen
-3. Convertir PDF a DOCX y volver a intentar
-
-### Problema: Excel de salida corrupto
-
-**Síntoma**: No se puede abrir el archivo descargado
-
-**Solución**:
-1. Verificar que el navegador completó la descarga
-2. Intentar descarga manual (botón en Paso 8)
-3. Limpiar caché del navegador
+- Mantén `modismos_ar.xlsx` versionado.
+- Mantén actualizada la lista `custom_dictionary_ignore_list.txt`.
+- Evita mezclar lógica de UI con lógica de negocio en nuevas mejoras.
+- Conserva el uso de `session_state` para no romper el flujo persistente.
 
 ---
 
-## 🤝 Contribuir
+## ⚠️ Consideraciones y límites actuales
 
-### Cómo Contribuir
-
-1. **Fork** el repositorio
-2. Crea una **rama** para tu feature (`git checkout -b feature/nueva-funcionalidad`)
-3. **Commit** tus cambios (`git commit -m 'Agrega nueva funcionalidad'`)
-4. **Push** a la rama (`git push origin feature/nueva-funcionalidad`)
-5. Abre un **Pull Request**
-
-### Guía de Estilo
-
-- **Código**: Seguir PEP 8
-- **Nombres**: Usar español para variables de negocio, inglés para técnicas
-- **Documentación**: Docstrings en todas las funciones públicas
-- **Tests**: Incluir tests para nuevas funcionalidades
-
-### Áreas de Contribución
-
-- 🐛 **Bug fixes**: Reportar y corregir errores
-- ✨ **Features**: Nuevas funcionalidades
-- 📚 **Documentación**: Mejorar README y comentarios
-- 🎨 **UI/UX**: Mejorar interfaz de usuario
-- ⚡ **Performance**: Optimizaciones de velocidad
+- Los formatos `.doc` y `.ppt` no son ideales para análisis directo.
+- Los documentos de más de **100 páginas o diapositivas** no se analizan con LanguageTool y se reportan en resumen como no analizados.
+- La calidad del análisis depende de que el texto del documento pueda extraerse correctamente.
+- PDFs escaneados pueden requerir OCR fuera de este flujo.
+- Streamlit Cloud puede quedarse corto para lotes muy grandes.
 
 ---
 
-## 🗺️ Roadmap
+## 🔐 Seguridad y manejo de archivos
 
-### v2.0 (Q2 2026)
+El aplicativo está orientado a procesamiento controlado por sesión.
 
-- [ ] Soporte para OCR en PDFs escaneados
-- [ ] Análisis de plagio con algoritmos de similitud
-- [ ] API REST para integración con otros sistemas
-- [ ] Dashboard de métricas históricas
-- [ ] Soporte para más idiomas (francés, alemán, portugués)
-
-### v2.1 (Q3 2026)
-
-- [ ] Integración con Google Drive y OneDrive
-- [ ] Análisis de legibilidad (índice Flesch)
-- [ ] Detección de sesgo en lenguaje
-- [ ] Exportación a formatos adicionales (JSON, CSV)
-- [ ] Modo batch por línea de comandos
-
-### v3.0 (Q4 2026)
-
-- [ ] Integración con modelos de IA (GPT) para sugerencias contextuales
-- [ ] Editor inline para correcciones
-- [ ] Sistema de roles y permisos
-- [ ] Base de datos para historial de análisis
-- [ ] Aplicación móvil (iOS/Android)
+Buenas prácticas recomendadas:
+- no conservar archivos temporales más tiempo del necesario,
+- no subir información sensible a entornos públicos sin validación previa,
+- ejecutar localmente cuando el volumen o la sensibilidad documental sea alto.
 
 ---
 
-## 📊 Métricas del Proyecto
+## 🛠️ Solución rápida de problemas
 
-- **Líneas de código**: ~4,970
-- **Módulos**: 2 (Home, GrammarScan)
-- **Formatos soportados**: 7 (PDF, DOCX, PPTX, TXT, ZIP, DOC, PPT)
-- **Idiomas**: 2+ (Español, Inglés, extensible)
-- **Máximo procesamiento**: 700 URLs (Cloud) / ilimitado (Local)
+### Java no detectado
+Verifica que Java esté instalado y disponible en el `PATH`.
 
----
+### No se analizan documentos grandes
+Revisa si el archivo supera las 100 páginas o diapositivas.
 
-## 🙏 Agradecimientos
+### El Excel no carga
+Confirma que exista la columna `url` y que el archivo sea `.xlsx` o `.xls`.
 
-- **LanguageTool**: Motor de análisis gramatical
-- **Streamlit**: Framework de aplicación web
-- **Universidad Tecnológica del Perú**: Patrocinio y casos de uso
+### No se descargan todos los documentos
+Descarga el CSV de fallidos para revisar qué URLs no pudieron procesarse.
 
----
-
-## 📞 Contacto
-
-- **Desarrollador**: José Luis Antunez Condezo
-- **Email**: joseluisantunezcondezo@utp.edu.pe
-- **GitHub**: [@joseluisantunezcondezo](https://github.com/joseluisantunezcondezo)
-- **Proyecto**: [UTP_GrammarScan](https://github.com/joseluisantunezcondezo/UTP_GrammarScan)
+### No aparecen incidencias
+Puede suceder si:
+- el archivo no tiene texto extraíble,
+- el contenido fue filtrado como bibliografía,
+- el documento no contiene incidencias detectables,
+- el archivo excede el umbral de páginas soportado para análisis.
 
 ---
 
-## 📜 Licencia
+## 🧪 Recomendaciones de documentación para GitHub
 
-Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para más detalles.
+Si vas a mantener este proyecto en producción, el README debería conservar siempre estas secciones:
+
+1. **Qué hace la herramienta** en lenguaje simple.
+2. **Flujo funcional** para usuarios no técnicos.
+3. **Arquitectura técnica** para desarrolladores.
+4. **Requisitos y ejecución** local o cloud.
+5. **Formatos soportados y límites**.
+6. **Archivos clave del proyecto**.
+7. **Problemas frecuentes y solución**.
+8. **Próximos cambios o roadmap** solo cuando estén confirmados.
 
 ---
 
-## 🌟 Star History
+## 📈 Próximas mejoras sugeridas
 
-Si este proyecto te fue útil, ¡no olvides darle una ⭐ en GitHub!
-
-[![Star History Chart](https://api.star-history.com/svg?repos=joseluisantunezcondezo/UTP_GrammarScan&type=Date)](https://star-history.com/#joseluisantunezcondezo/UTP_GrammarScan&Date)
+- incorporar OCR para PDFs escaneados,
+- separar módulos de UI, procesamiento y exportación en archivos independientes,
+- agregar pruebas automáticas para las funciones críticas,
+- documentar mejor los archivos auxiliares de diccionario y exclusiones,
+- incorporar un diagrama de arquitectura visual en `/docs`.
 
 ---
 
-**Hecho con ❤️ para la comunidad académica de UTP**
+## 📄 Licencia
+
+Define aquí la licencia que aplicará al proyecto, por ejemplo MIT, Apache 2.0 o uso interno institucional.
+
+---
+
+## 👨‍💻 Autor
+
+**José Luis Antunez Condezo**
+
+Proyecto orientado a automatización documental, análisis lingüístico y flujos de revisión académica.
