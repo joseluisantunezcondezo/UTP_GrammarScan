@@ -192,7 +192,7 @@ Incluye:
 
 ### Etapa A. Descarga masiva desde Excel
 Entrada esperada:
-- un Excel con la columna `url`.
+- Un Excel con la columna `url`.
 
 La app:
 - Filtra extensiones permitidas.
@@ -212,16 +212,20 @@ El usuario puede subir:
 
 Los formatos `.doc` y `.ppt` se identifican, pero se marcan como no soportados para análisis directo.
 
+<img width="1646" height="843" alt="image" src="https://github.com/user-attachments/assets/ed3bb6e2-33ff-4c14-a2a7-a2d82747e0fb" />
+
 ### Etapa C. Transformación PDF → Word
 Los PDFs pueden convertirse a DOCX para integrarlos al flujo posterior.
 
 ### Etapa D. Análisis GrammarScan
 Se procesan los archivos válidos con:
 - Extracción de texto.
-- fFltrado de bibliografía.
+- Fltrado de bibliografía.
 - Control de URLs dentro del texto.
 - Revisión con LanguageTool.
 - Detección opcional de modismos.
+
+<img width="1648" height="815" alt="image" src="https://github.com/user-attachments/assets/8177e7e0-5f66-44e0-9155-10d2c0a29d14" />
 
 ### Etapa E. Exportación
 La aplicación genera:
