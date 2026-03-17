@@ -200,6 +200,8 @@ La app:
 - Descarga documentos con reintentos.
 - Genera ZIP de archivos descargados.
 - Genera CSV de descargas fallidas cuando aplica.
+  
+<img width="1453" height="806" alt="image" src="https://github.com/user-attachments/assets/7687c6d0-ef27-4ba9-bec9-48b43f625a78" />
 
 ### Etapa B. Carga directa de documentos
 El usuario puede subir:
