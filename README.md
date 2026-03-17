@@ -40,10 +40,10 @@ Este aplicativo resuelve ese problema porque:
 Este aplicativo está orientado a personas que necesitan **revisar calidad de redacción** sin intervenir en código, por ejemplo:
 
 - Docentes
-- Coordinadores académicos.
-- Equipos de calidad.
-- Personal administrativo.
-- Revisores de contenido.
+- Coordinadores académicos
+- Equipos de calidad
+- Personal administrativo
+- Revisores de contenido
 
 ---
 
