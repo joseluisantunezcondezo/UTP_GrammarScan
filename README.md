@@ -10,8 +10,7 @@
 
 ## 📌 Descripción general
 
-**UTP - GrammarScan** es una aplicación pensada para simplificar la revisión documental en entornos académicos.
-Permite descargar archivos desde un Excel con URLs, procesar documentos PDF, Word, PowerPoint, TXT o ZIP, analizar el contenido con **LanguageTool local**, detectar **modismos argentinos** de forma opcional y generar un **reporte Excel** con incidencias, sugerencias y contexto.
+**UTP - GrammarScan** permite descargar archivos desde un Excel con URLs, procesar documentos PDF, Word, PowerPoint, TXT o ZIP, analizar el contenido con **LanguageTool**, detectar **modismos argentinos** de forma opcional y generar un **reporte Excel** con incidencias, sugerencias y contexto.
 
 En términos simples, la herramienta ayuda a responder esta necesidad:
 
@@ -28,45 +27,34 @@ La revisión manual de documentos suele ser lenta, repetitiva y difícil de esca
 
 Este aplicativo resuelve ese problema porque:
 
-- automatiza la descarga de documentos desde un Excel,
-- convierte PDFs a Word para facilitar su procesamiento,
-- analiza ortografía y gramática con reglas robustas,
-- filtra bibliografía para reducir falsos positivos,
-- genera un Excel final con resultados detallados.
+- Automatiza la descarga de documentos desde un reporte Excel que contiene las URLs de los archivos a descargar.
+- Convierte PDFs a Word para facilitar su procesamiento.
+- Analiza ortografía y gramática con reglas robustas.
+- Filtra bibliografía para reducir falsos positivos.
+- Genera un Excel final con resultados detallados.
 
 ---
 
 ## 👥 ¿Para quién está pensado?
 
-### Usuarios no técnicos
-
 Este aplicativo está orientado a personas que necesitan **revisar calidad de redacción** sin intervenir en código, por ejemplo:
 
-- docentes,
-- coordinadores académicos,
-- equipos de calidad,
-- personal administrativo,
-- revisores de contenido.
-
-### Usuarios técnicos
-
-También está pensado para quienes necesiten **mantener, desplegar o mejorar** la solución:
-
-- desarrolladores Python,
-- analistas de automatización,
-- responsables de despliegue en Streamlit,
-- equipos de soporte técnico.
+- Docentes
+- Coordinadores académicos.
+- Equipos de calidad.
+- Personal administrativo.
+- Revisores de contenido.
 
 ---
 
-## ✅ ¿Qué puede hacer el aplicativo?
+## ¿Qué puede hacer el aplicativo?
 
 ### Funcionalidades principales
 
 - **Descarga masiva desde Excel** usando una columna `url`.
 - **Carga manual** de archivos PDF, DOCX, PPTX, TXT y ZIP.
 - **Conversión de PDF a Word** para normalizar documentos antes del análisis.
-- **Análisis ortográfico y gramatical** con LanguageTool local.
+- **Análisis ortográfico y gramatical** con LanguageTool.
 - **Detección opcional de modismos argentinos** mediante `modismos_ar.xlsx`.
 - **Filtrado de bibliografía y referencias** para disminuir ruido en los resultados.
 - **Exportación a Excel** con detalle de incidencias y resumen consolidado.
@@ -96,17 +84,17 @@ Reporte final en Excel
 ### Flujo de uso dentro del aplicativo
 
 1. El usuario puede cargar un **Excel con URLs** de documentos.
-2. La app descarga automáticamente archivos compatibles.
+2. La app descarga automáticamente todos los archivos compatibles.
 3. Si existen PDFs, la app los transforma a **DOCX**.
 4. El usuario también puede subir documentos manualmente o en ZIP.
 5. El sistema analiza los archivos admitidos.
 6. Se muestran métricas e incidencias detectadas.
 7. Se genera un **Excel final** con resultados y resumen.
-8. El archivo Excel se descarga desde la interfaz.
+8. El archivo Excel se descarga de forma automatica desde la interfaz.
 
 ---
 
-## 🏗️ Arquitectura explicada de forma sencilla
+## 🏗️ Arquitectura
 
 La arquitectura del aplicativo se puede entender en **4 capas**:
 
@@ -114,44 +102,35 @@ La arquitectura del aplicativo se puede entender en **4 capas**:
 Es la pantalla que ve el usuario en Streamlit.
 
 Aquí se muestran:
-- el módulo Home,
-- el módulo Report GrammarScan,
-- expanders,
-- métricas,
-- barras de progreso,
-- botones de descarga,
+- El Módulo Home
+- El Módulo Report GrammarScan
+- Expanders
+- Métricas
+- Barras de progreso
+- Botones de descarga
 - tablas de resultados.
 
-### 2. Capa de orquestación
-Es la lógica que coordina el flujo completo usando `st.session_state`.
-
-Esta capa decide:
-- qué parte del proceso ya fue ejecutada,
-- cuándo reiniciar el pipeline,
-- cuándo reutilizar resultados previos,
-- cuándo relanzar análisis automáticamente.
-
-### 3. Capa de procesamiento documental
+### 2. Capa de procesamiento documental
 Es la parte que trabaja directamente con los archivos.
 
 Incluye:
-- descarga masiva desde URLs,
-- lectura de PDF, DOCX, PPTX y TXT,
-- extracción de texto,
-- conversión PDF → DOCX,
-- expansión de ZIP,
-- conteo lógico de páginas,
-- filtros de bibliografía.
+- Descarga masiva desde URLs.
+- Lectura de PDF, DOCX, PPTX y TXT.
+- Extracción de texto.
+- Conversión PDF → DOCX.
+- Expansión de ZIP.
+- Conteo lógico de páginas.
+- Filtros de bibliografía.
 
-### 4. Capa de análisis y salida
+### 3. Capa de análisis y salida
 Es donde ocurre la validación lingüística y la generación del resultado final.
 
 Incluye:
-- LanguageTool local,
-- detección de modismos,
-- limpieza de incidencias inválidas,
-- enriquecimiento de metadata,
-- exportación a Excel.
+- LanguageTool.
+- Detección de modismos.
+- Limpieza de incidencias inválidas.
+- Enriquecimiento de metadata.
+- Exportación a Excel.
 
 ---
 
@@ -207,24 +186,6 @@ Incluye:
 
 ---
 
-## 🧩 Módulos del aplicativo
-
-## 1. Home
-Muestra el propósito del sistema, sus funcionalidades, el flujo de trabajo y recomendaciones generales de uso.
-
-## 2. Report GrammarScan
-Concentra el flujo operativo principal:
-
-- carga del Excel con URLs,
-- descarga masiva,
-- descarga de ZIPs consolidados,
-- carga directa de documentos,
-- conversión de PDF a Word,
-- análisis ortográfico y gramatical,
-- exportación automática a Excel.
-
----
-
 ## 🔄 Pipeline operativo real
 
 ### Etapa A. Descarga masiva desde Excel
@@ -232,17 +193,17 @@ Entrada esperada:
 - un Excel con la columna `url`.
 
 La app:
-- filtra extensiones permitidas,
-- valida límites en Streamlit Cloud,
-- descarga documentos con reintentos,
-- genera ZIP de archivos descargados,
-- genera CSV de descargas fallidas cuando aplica.
+- Filtra extensiones permitidas.
+- Valida límites en Streamlit Cloud.
+- Descarga documentos con reintentos.
+- Genera ZIP de archivos descargados.
+- Genera CSV de descargas fallidas cuando aplica.
 
 ### Etapa B. Carga directa de documentos
 El usuario puede subir:
-- PDF,
-- DOCX,
-- PPTX,
+- PDF
+- DOCX
+- PPTX
 - ZIP con documentos dentro.
 
 Los formatos `.doc` y `.ppt` se identifican, pero se marcan como no soportados para análisis directo.
@@ -252,11 +213,11 @@ Los PDFs pueden convertirse a DOCX para integrarlos al flujo posterior.
 
 ### Etapa D. Análisis GrammarScan
 Se procesan los archivos válidos con:
-- extracción de texto,
-- filtrado de bibliografía,
-- control de URLs dentro del texto,
-- revisión con LanguageTool,
-- detección opcional de modismos.
+- Extracción de texto.
+- fFltrado de bibliografía.
+- Control de URLs dentro del texto.
+- Revisión con LanguageTool.
+- Detección opcional de modismos.
 
 ### Etapa E. Exportación
 La aplicación genera:
@@ -285,8 +246,6 @@ La aplicación genera:
 | Tipo | Archivo |
 |------|---------|
 | Excel final | `UTP_GrammarScan_Resultados.xlsx` |
-| ZIP de descarga | `Descarga_Masiva_Documentos_*.zip` |
-| CSV de fallidos | `descargas_fallidas.csv` |
 
 ---
 
@@ -315,11 +274,11 @@ Convierte los resultados a un Excel descargable con hojas de resultados y resume
 ## 🗂️ Archivos importantes del proyecto
 
 ```text
-app.py                              # Aplicación principal Streamlit
-modismos_ar.xlsx                    # Diccionario de modismos argentinos
-custom_dictionary_ignore_list.txt   # Lista de términos a ignorar para reglas morfológicas
-requirements.txt                    # Dependencias del proyecto
-.streamlit/                         # Configuración para despliegue en Streamlit
+app.py                              # Aplicación principal Streamlit.
+modismos_ar.xlsx                    # Diccionario de modismos argentinos.
+custom_dictionary_ignore_list.txt   # Lista de términos a ignorar para reglas morfológicas.
+requirements.txt                    # Dependencias del proyecto.
+.streamlit/                         # Configuración para despliegue en Streamlit.
 ```
 
 ---
@@ -328,44 +287,23 @@ requirements.txt                    # Dependencias del proyecto
 
 ### Requisitos base
 
-- Python 3.8 o superior
-- Java instalado y accesible en el sistema
-- Dependencias Python del proyecto
+- Python 3.8 o superior.
+- Java instalado y accesible en el sistema.
+- Dependencias Python del proyecto (requirements.txt)
 
 ### Dependencias principales usadas por la app
 
-- `streamlit`
-- `pandas`
-- `pdfplumber`
-- `PyMuPDF` (`fitz`)
-- `python-docx`
-- `python-pptx`
-- `requests`
-- `language_tool_python`
-
----
-
-## 🚀 Ejecución local
-
-```bash
-python -m venv venv
-```
-
-### Windows
-
-```bash
-venv\Scripts\activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-### Linux / macOS
-
-```bash
-source venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
+- **streamlit**: framework para construir la interfaz web interactiva del aplicativo.
+- **pandas**: librería para leer, transformar y exportar datos en estructuras tipo tabla.
+- **pdfplumber**: usada para extraer texto y tablas desde archivos PDF.
+- **PyMuPDF (`fitz`)**: permite leer, analizar y manipular PDFs de forma rápida y eficiente.
+- **python-docx**: utilizada para crear y editar documentos de Word (`.docx`).
+- **python-pptx**: permite generar y modificar presentaciones de PowerPoint (`.pptx`).
+- **openpyxl**: permite leer y editar archivos Excel existentes.
+- **lxml**: facilita el procesamiento y análisis de estructuras XML y HTML.
+- **xlsxwriter**: se utiliza para generar archivos Excel con formato.
+- **requests**: librería para realizar consultas HTTP a servicios externos o APIs.
+- **language_tool_python**: usada para revisar gramática, ortografía y estilo del texto automáticamente.
 
 ---
 
@@ -382,15 +320,8 @@ streamlit run app.py
 ### Para despliegue en Streamlit Cloud
 
 - Se recomienda trabajar entre **500 y 700 registros** por lote.
-- Para cargas mayores, conviene dividir el Excel o ejecutar localmente.
+- Para cargas mayores, conviene dividir el Excel o ejecutar localmente el app.
 - Esta recomendación ayuda a evitar problemas de memoria del contenedor.
-
-### Para mantenimiento técnico
-
-- Mantén `modismos_ar.xlsx` versionado.
-- Mantén actualizada la lista `custom_dictionary_ignore_list.txt`.
-- Evita mezclar lógica de UI con lógica de negocio en nuevas mejoras.
-- Conserva el uso de `session_state` para no romper el flujo persistente.
 
 ---
 
@@ -399,19 +330,7 @@ streamlit run app.py
 - Los formatos `.doc` y `.ppt` no son ideales para análisis directo.
 - Los documentos de más de **100 páginas o diapositivas** no se analizan con LanguageTool y se reportan en resumen como no analizados.
 - La calidad del análisis depende de que el texto del documento pueda extraerse correctamente.
-- PDFs escaneados pueden requerir OCR fuera de este flujo.
 - Streamlit Cloud puede quedarse corto para lotes muy grandes.
-
----
-
-## 🔐 Seguridad y manejo de archivos
-
-El aplicativo está orientado a procesamiento controlado por sesión.
-
-Buenas prácticas recomendadas:
-- no conservar archivos temporales más tiempo del necesario,
-- no subir información sensible a entornos públicos sin validación previa,
-- ejecutar localmente cuando el volumen o la sensibilidad documental sea alto.
 
 ---
 
@@ -421,9 +340,9 @@ Buenas prácticas recomendadas:
 Verifica que Java esté instalado y disponible en el `PATH`.
 
 ### No se analizan documentos grandes
-Revisa si el archivo supera las 100 páginas o diapositivas.
+Revisa si el archivo supera las 100 páginas o diapositivas, este tipo de archivos no son tratados como documentos académicos.
 
-### El Excel no carga
+### El Excel que contiene las URLs no carga
 Confirma que exista la columna `url` y que el archivo sea `.xlsx` o `.xls`.
 
 ### No se descargan todos los documentos
@@ -431,41 +350,10 @@ Descarga el CSV de fallidos para revisar qué URLs no pudieron procesarse.
 
 ### No aparecen incidencias
 Puede suceder si:
-- el archivo no tiene texto extraíble,
-- el contenido fue filtrado como bibliografía,
-- el documento no contiene incidencias detectables,
-- el archivo excede el umbral de páginas soportado para análisis.
-
----
-
-## 🧪 Recomendaciones de documentación para GitHub
-
-Si vas a mantener este proyecto en producción, el README debería conservar siempre estas secciones:
-
-1. **Qué hace la herramienta** en lenguaje simple.
-2. **Flujo funcional** para usuarios no técnicos.
-3. **Arquitectura técnica** para desarrolladores.
-4. **Requisitos y ejecución** local o cloud.
-5. **Formatos soportados y límites**.
-6. **Archivos clave del proyecto**.
-7. **Problemas frecuentes y solución**.
-8. **Próximos cambios o roadmap** solo cuando estén confirmados.
-
----
-
-## 📈 Próximas mejoras sugeridas
-
-- incorporar OCR para PDFs escaneados,
-- separar módulos de UI, procesamiento y exportación en archivos independientes,
-- agregar pruebas automáticas para las funciones críticas,
-- documentar mejor los archivos auxiliares de diccionario y exclusiones,
-- incorporar un diagrama de arquitectura visual en `/docs`.
-
----
-
-## 📄 Licencia
-
-Define aquí la licencia que aplicará al proyecto, por ejemplo MIT, Apache 2.0 o uso interno institucional.
+- El archivo no tiene texto extraíble.
+- El contenido fue filtrado como bibliografía.
+- El documento no contiene incidencias detectables.
+- El archivo excede el umbral de páginas soportado para análisis (archivos > 100 páginas)
 
 ---
 
