@@ -19,8 +19,6 @@ En términos simples, la herramienta ayuda a responder esta necesidad:
 - Revisar ortografía y gramática de forma automatizada.
 - Entregar un reporte listo para revisión académica o administrativa.
   
-<img width="1743" height="835" alt="image" src="https://github.com/user-attachments/assets/b7914ef8-18c4-4047-a582-52e7b17bbe95" />
-
 ---
 
 ## ¿Qué problema resuelve?
