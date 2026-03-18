@@ -104,12 +104,12 @@ La arquitectura del aplicativo se puede entender en **4 capas**:
 Es la pantalla que ve el usuario en Streamlit.
 
 Aquí se muestran:
-- El Módulo Home
-- El Módulo Report GrammarScan
-- Expanders
-- Métricas
-- Barras de progreso
-- Botones de descarga
+- El Módulo Home.
+- El Módulo Report GrammarScan.
+- Expanders.
+- Métricas.
+- Barras de progreso.
+- Botones de descarga.
 - Tablas de resultados.
 
 ### 2. Capa de procesamiento documental
