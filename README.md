@@ -165,7 +165,8 @@ flowchart TD
             LanguageTool +
             Filtros de bibliografía +
             Modismos"]
-    H --> J[Excel final / ResumenIncidencias]
+    H --> J["Excel final /
+            ResumenIncidencias"]
 ```
 ---
 ## 🧱 Arquitectura técnica
