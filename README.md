@@ -147,8 +147,6 @@ flowchart TD
     D2 --> E
     E --> F1[PDF a DOCX]
     E --> F2[DOCX PPT TXT  directos]
-    F5 --> F1
-    F5 --> F2
     F1 --> G[Extracción de páginas o diapositivas]
     F2 --> G
     G --> H[Análisis lingüístico
