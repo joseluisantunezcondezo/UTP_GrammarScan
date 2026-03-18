@@ -157,12 +157,13 @@ flowchart TD
     D1 --> E[Normalización de archivos]
     D2 --> E
     E --> F1[PDF a DOCX]
-    E --> F2[DOCX PPT TXT Directos]
+    E --> F2[DOCX-PPT-TXT Directos]
     F1 --> G["Extracción de
               páginas/diapositivas"]
     F2 --> G
     G --> H["Análisis lingüístico
-            LanguageTool + Filtros de bibliografía +
+            LanguageTool +
+            Filtros de bibliografía +
             Modismos"]
     H --> J[Excel final / ResumenIncidencias]
 ```
