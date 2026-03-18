@@ -135,7 +135,39 @@ Incluye:
 - Exportación a Excel.
 
 ---
+### Vista técnica resumida
 
+```mermaid
+flowchart TD
+    A[Interfaz Streamlit
+Home / Report GrammarScan] --> B[Orquestación con st.session_state]
+    B --> C[Ingesta de archivos]
+    C --> D1[Descarga masiva desde Excel
+columna url]
+    C --> D2[Carga directa de PDF DOCX PPTX TXT ZIP]
+    D1 --> E[Normalización documental]
+    D2 --> E
+    E --> F1[PDF a DOCX
+PDFBatchProcessor]
+    E --> F2[DOCX directos]
+    E --> F3[PPTX directos]
+    E --> F4[TXT directos]
+    E --> F5[Expansión de ZIP]
+    F5 --> F1
+    F5 --> F2
+    F5 --> F3
+    F5 --> F4
+    F1 --> G[Extracción de páginas o diapositivas]
+    F2 --> G
+    F3 --> G
+    F4 --> G
+    G --> H[Análisis lingüístico
+LanguageTool + filtros de bibliografía + modismos]
+    H --> I[Consolidación y enriquecimiento de resultados]
+    I --> J[Excel final
+Resultados / ResumenIncidencias / ResumenCompleto]
+```
+---
 ## 🧱 Arquitectura técnica
 
 ```text
