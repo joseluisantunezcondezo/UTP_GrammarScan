@@ -150,8 +150,10 @@ Incluye:
 flowchart TD
     A[Interfaz Streamlit] --> B[Orquestación con session_state]
     B --> C[Ingesta de archivos]
-    C --> D1[Descarga masiva desde Excel]
-    C --> D2[Carga directa PDF DOCX PPTX ZIP]
+    C --> D1["Descarga masiva
+              (Excel con URLs)"]
+    C --> D2["Carga Directa o ZIP
+            (PDF-DOCX-PPTX)"]
     D1 --> E[Normalización de archivos]
     D2 --> E
     E --> F1[PDF a DOCX]
