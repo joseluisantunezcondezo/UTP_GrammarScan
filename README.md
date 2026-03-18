@@ -138,20 +138,19 @@ Incluye:
 ### Vista técnica
 
 ```mermaid
-flowchart TD
-    A[Interfaz Streamlit] --> B[Orquestación con st.session_state]
-    B --> C[Ingesta de archivos]
-    C --> D1[Descarga masiva desde Excel]
-    C --> D2[Carga directa PDF DOCX PPTX ZIP]
-    D1 --> E[Normalización de archivos]
+flowchart LR
+    A[Interfaz<br/>Streamlit] --> B[Orquestación<br/>st.session_state]
+    B --> C[Ingesta de<br/>archivos]
+    C --> D1[Descarga masiva<br/>desde Excel]
+    C --> D2[Carga directa<br/>PDF DOCX PPTX ZIP]
+    D1 --> E[Normalización<br/>de archivos]
     D2 --> E
     E --> F1[PDF a DOCX]
-    E --> F2[DOCX PPT TXT  directos]
-    F1 --> G[Extracción de páginas/diapositivas]
+    E --> F2[DOCX PPT TXT<br/>directos]
+    F1 --> G[Extracción de<br/>páginas / diapositivas]
     F2 --> G
-    G --> H[Análisis lingüístico
-LanguageTool + Filtros de bibliografía + Modismos]
-    H --> J[Excel final / ResumenIncidencias]
+    G --> H[Análisis lingüístico<br/>LanguageTool + Bibliografía + Modismos]
+    H --> J[Excel final /<br/>ResumenIncidencias]
 ```
 ---
 ## 🧱 Arquitectura técnica
