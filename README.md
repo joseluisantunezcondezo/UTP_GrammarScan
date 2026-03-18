@@ -65,7 +65,7 @@ Este aplicativo está orientado a personas que necesitan **revisar calidad de re
 
 ---
 
-## 🧭 Flujo funcional del usuario
+## Flujo funcional del usuario
 
 ### Flujo resumido
 
