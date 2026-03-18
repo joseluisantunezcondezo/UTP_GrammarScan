@@ -135,7 +135,7 @@ Incluye:
 - Exportación a Excel.
 
 ---
-### Vista técnica resumida
+### Vista técnica
 
 ```mermaid
 flowchart TD
