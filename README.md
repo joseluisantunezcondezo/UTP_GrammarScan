@@ -151,7 +151,6 @@ flowchart TD
     F2 --> G
     G --> H[Análisis lingüístico
 LanguageTool + Filtros de bibliografía + Modismos]
-    H --> I[Consolidación Resultados]
     I --> J[Excel final / ResumenIncidencias]
 ```
 ---
