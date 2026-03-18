@@ -151,8 +151,6 @@ flowchart TD
     F5 --> F2
     F1 --> G[Extracción de páginas o diapositivas]
     F2 --> G
-    F3 --> G
-    F4 --> G
     G --> H[Análisis lingüístico
 LanguageTool + Filtros de bibliografía + Modismos]
     H --> I[Consolidación Resultados]
