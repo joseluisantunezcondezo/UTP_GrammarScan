@@ -383,7 +383,7 @@ Puede suceder si:
 
 ---
 
-## 👨‍💻 Autor
+## Autor
 
 **José Luis Antunez Condezo**
 
