@@ -112,7 +112,18 @@ Aquí se muestran:
 - Botones de descarga.
 - Tablas de resultados.
 
-### 2. Capa de procesamiento documental
+### 2. Capa de orquestación
+
+Controla el flujo del proceso usando `st.session_state`.
+
+Esta capa decide:
+
+- Qué pasos ya terminaron.
+- Qué resultados deben reutilizarse.
+- Cuándo reiniciar el pipeline.
+- Qué archivos están disponibles en cada etapa.
+- 
+### 3. Capa de procesamiento documental
 Es la parte que trabaja directamente con los archivos.
 
 Incluye:
@@ -124,7 +135,7 @@ Incluye:
 - Conteo lógico de páginas.
 - Filtros de bibliografía.
 
-### 3. Capa de análisis y salida
+### 4. Capa de análisis y salida
 Es donde ocurre la validación lingüística y la generación del resultado final.
 
 Incluye:
