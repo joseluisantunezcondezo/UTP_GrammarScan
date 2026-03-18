@@ -122,7 +122,7 @@ Esta capa decide:
 - Qué resultados deben reutilizarse.
 - Cuándo reiniciar el pipeline.
 - Qué archivos están disponibles en cada etapa.
-- 
+  
 ### 3. Capa de procesamiento documental
 Es la parte que trabaja directamente con los archivos.
 
