@@ -235,7 +235,7 @@ La aplicación genera:
 
 ---
 
-## 📂 Formatos soportados
+## Formatos soportados
 
 ### Entrada
 
@@ -257,7 +257,7 @@ La aplicación genera:
 
 ---
 
-## 🧠 Componentes técnicos clave
+## Componentes técnicos clave
 
 ### `init_session_state()`
 Inicializa el estado persistente del flujo para que la app recuerde resultados, cargas y pasos ya ejecutados dentro de la sesión.
@@ -279,7 +279,7 @@ Convierte los resultados a un Excel descargable con hojas de resultados y resume
 
 ---
 
-## 🗂️ Archivos importantes del proyecto
+## Archivos importantes del proyecto
 
 ```text
 app.py                              # Aplicación principal Streamlit.
@@ -291,7 +291,7 @@ requirements.txt                    # Dependencias del proyecto.
 
 ---
 
-## ⚙️ Requisitos para ejecución
+## Requisitos para ejecución
 
 ### Requisitos base
 
@@ -315,7 +315,7 @@ requirements.txt                    # Dependencias del proyecto.
 
 ---
 
-## 🖥️ Recomendaciones de uso
+## Recomendaciones de uso
 
 ### Para usuarios funcionales
 
@@ -333,7 +333,7 @@ requirements.txt                    # Dependencias del proyecto.
 
 ---
 
-## ⚠️ Consideraciones y límites actuales
+## Consideraciones y límites actuales
 
 - Los formatos `.doc` y `.ppt` no son ideales para análisis directo.
 - Los documentos de más de **100 páginas o diapositivas** no se analizan con LanguageTool y se reportan en resumen como no analizados.
@@ -342,7 +342,7 @@ requirements.txt                    # Dependencias del proyecto.
 
 ---
 
-## 🛠️ Solución rápida de problemas
+## Solución rápida de problemas
 
 ### Java no detectado
 Verifica que Java esté instalado y disponible en el `PATH`.
