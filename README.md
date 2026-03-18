@@ -151,7 +151,7 @@ flowchart TD
     F2 --> G
     G --> H[Análisis lingüístico
 LanguageTool + Filtros de bibliografía + Modismos]
-    I --> J[Excel final / ResumenIncidencias]
+    H --> J[Excel final / ResumenIncidencias]
 ```
 ---
 ## 🧱 Arquitectura técnica
