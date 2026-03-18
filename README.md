@@ -8,7 +8,7 @@ Aplicativo web en Streamlit para descarga masiva, transformación y revisión au
 
 ---
 
-## 📌 Descripción general
+## Descripción general
 
 **UTP - GrammarScan** permite descargar archivos desde un Excel con URLs, procesar documentos PDF, Word, PowerPoint, TXT o ZIP, analizar el contenido con **LanguageTool**, detectar **modismos argentinos** de forma opcional y generar un **reporte Excel** con incidencias, sugerencias y contexto.
 
@@ -23,7 +23,7 @@ En términos simples, la herramienta ayuda a responder esta necesidad:
 
 ---
 
-## 🎯 ¿Qué problema resuelve?
+## ¿Qué problema resuelve?
 
 La revisión manual de documentos suele ser lenta, repetitiva y difícil de escalar cuando se trabaja con muchos archivos.
 
@@ -37,7 +37,7 @@ Este aplicativo resuelve ese problema porque:
 
 ---
 
-## 👥 ¿Para quién está pensado?
+## ¿Para quién está pensado?
 
 Este aplicativo está orientado a personas que necesitan **revisar calidad de redacción** sin intervenir en código, por ejemplo:
 
@@ -188,7 +188,7 @@ Incluye:
 
 ---
 
-## 🔄 Pipeline operativo real
+## Pipeline operativo real
 
 ### Etapa A. Descarga masiva desde Excel
 Entrada esperada:
