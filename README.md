@@ -1,6 +1,6 @@
 # 📚 UTP - GrammarScan
 
-> Aplicativo web en Streamlit para descarga masiva, transformación y revisión automatizada de ortografía y gramática en documentos académicos y administrativos.
+Aplicativo web en Streamlit para descarga masiva, transformación y revisión automatizada de ortografía y gramática en documentos académicos y administrativos.
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B.svg)](https://streamlit.io/)
